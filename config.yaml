@@ -1,0 +1,39 @@
+# API Configuration
+api:
+  analysis_api_key: ""  # Optional
+  
+# Chrome Web Store
+chrome_store:
+  base_url: "https://chrome.google.com/webstore/detail"
+  download_url: "https://clients2.google.com/service/update2/crx"
+  
+# Analysis Settings
+analysis:
+  max_file_size_mb: 50
+  timeout_seconds: 300
+  ai_review_enabled: true
+  
+# Risk Scoring Weights
+risk_weights:
+  dangerous_permissions: 0.3
+  obfuscated_code: 0.2
+  external_scripts: 0.2
+  suspicious_patterns: 0.2
+  ai_analysis: 0.1
+
+# Database
+database:
+  type: "sqlite"
+  path: "data/extensions.db"
+  
+# Web Dashboard
+web:
+  host: "127.0.0.1"
+  port: 5000
+  debug: true
+  
+# Paths
+paths:
+  downloads: "downloads/"
+  reports: "reports/"
+  data: "data/"
