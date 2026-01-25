@@ -10,9 +10,31 @@ flask-cors==4.0.0
 # Data storage
 sqlalchemy==2.0.25
 
-# Analysis tools
-python-magic==0.4.27
-yara-python==4.3.1
+# Utilities
+tqdm==4.66.1
+colorama==0.4.6
+python-dotenv==1.0.0
+
+# Reporting
+jinja2==3.1.2
+markdown==3.5.1
+
+# Windows-compatible file type detection (replaces python-magic)
+python-magic-bin==0.4.14; sys_platform == 'win32'
+
+# Optional: YARA (skip for now, can add later if needed)
+# yara-python==4.3.1
+# Core dependencies
+requests==2.31.0
+beautifulsoup4==4.12.2
+pyyaml==6.0.1
+
+# Web framework
+flask==3.0.0
+flask-cors==4.0.0
+
+# Data storage
+sqlalchemy==2.0.25
 
 # Utilities
 tqdm==4.66.1
@@ -22,50 +44,12 @@ python-dotenv==1.0.0
 # Reporting
 jinja2==3.1.2
 markdown==3.5.1
-```
 
-Save it (Ctrl+S)
+# Windows-compatible file type detection (replaces python-magic)
+python-magic-bin==0.4.14; sys_platform == 'win32'
 
----
+# PDF Generation
+weasyprint==60.1
 
-#### **File 3: .gitignore**
-- Create new file: `.gitignore`
-- Paste:
-```
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-ENV/
-build/
-dist/
-*.egg-info/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Project specific
-config.yaml
-*.db
-downloads/
-data/extensions/
-*.crx
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Secrets
-.env
-*.key
-*.pem
-api_keys.txt
+# Optional: YARA (skip for now, can add later if needed)
+# yara-python==4.3.1
