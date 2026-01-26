@@ -241,9 +241,10 @@ class EnhancedStaticAnalyzer:
                 'severity': 'high',
                 'description': f"Sends data to {exfil['destination']}",
                 'technique': 'Data Exfiltration',
-                'file': exfil.get('evidence', '').split('\n')[0] if exfil.get('evidence') else 'Unknown',
+                'file': exfil.get('file', 'Unknown'),  # Fixed: use actual filename from AST
                 'line': exfil.get('line', 0),
                 'context': exfil.get('evidence', ''),
+                'evidence': exfil.get('evidence', ''),  # Add evidence field for code snippet
                 'destination': exfil.get('destination'),  # IMPORTANT: exact URL
                 'method': exfil.get('method'),
                 'data_source': exfil.get('data_source')

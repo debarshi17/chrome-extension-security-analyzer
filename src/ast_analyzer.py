@@ -214,6 +214,7 @@ class JavaScriptASTAnalyzer:
                         'method': 'POST',
                         'data_source': fetch_analysis.get('body_source', 'Unknown'),
                         'severity': 'critical',
+                        'file': file_path,  # Include filename
                         'line': node.loc.start.line if hasattr(node, 'loc') else 0,
                         'evidence': self._get_code_snippet(source_code, node)
                     })
