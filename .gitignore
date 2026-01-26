@@ -7,6 +7,12 @@ data/
 
 # Generated analysis reports
 reports/
+
+# Dynamic IOC database
+iocs.json
+
+# Editor/tool local files
+.claude/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
