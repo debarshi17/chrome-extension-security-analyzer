@@ -192,7 +192,7 @@ class EnhancedStaticAnalyzer:
         # Read manifest
         manifest_path = extension_dir / "manifest.json"
         if not manifest_path.exists():
-            print(f"[✗] No manifest.json found")
+            print(f"[[X]] No manifest.json found")
             return None
         
         with open(manifest_path, 'r', encoding='utf-8') as f:
@@ -342,10 +342,10 @@ class EnhancedStaticAnalyzer:
             
             if risk_score >= 7:
                 permission_analysis['high_risk'].append(perm)
-                print(f"  🚩 HIGH RISK: {perm}")
+                print(f"  [FLAG] HIGH RISK: {perm}")
             elif risk_score >= 4:
                 permission_analysis['medium_risk'].append(perm)
-                print(f"  ⚠️  MEDIUM: {perm}")
+                print(f"  [!]  MEDIUM: {perm}")
             else:
                 permission_analysis['low_risk'].append(perm)
         
@@ -380,7 +380,7 @@ class EnhancedStaticAnalyzer:
                 'severity': 'CRITICAL' if affiliate_params else 'HIGH'
             }
             
-            print(f"  🚨 SEARCH HIJACKING DETECTED: {search_url}")
+            print(f"  [ALERT] SEARCH HIJACKING DETECTED: {search_url}")
             if affiliate_params:
                 print(f"     Affiliate params: {', '.join(affiliate_params)}")
         
@@ -390,7 +390,7 @@ class EnhancedStaticAnalyzer:
                 'url': overrides['homepage'],
                 'severity': 'HIGH'
             }
-            print(f"  🚨 HOMEPAGE HIJACKING: {overrides['homepage']}")
+            print(f"  [ALERT] HOMEPAGE HIJACKING: {overrides['homepage']}")
         
         if 'startup_pages' in overrides:
             findings['has_overrides'] = True
@@ -398,7 +398,7 @@ class EnhancedStaticAnalyzer:
                 'urls': overrides['startup_pages'],
                 'severity': 'HIGH'
             }
-            print(f"  🚨 STARTUP HIJACKING: {len(overrides['startup_pages'])} pages")
+            print(f"  [ALERT] STARTUP HIJACKING: {len(overrides['startup_pages'])} pages")
         
         if 'newtab' in url_overrides:
             findings['has_overrides'] = True
@@ -406,7 +406,7 @@ class EnhancedStaticAnalyzer:
                 'url': url_overrides['newtab'],
                 'severity': 'MEDIUM'
             }
-            print(f"  ⚠️  NEW TAB OVERRIDE: {url_overrides['newtab']}")
+            print(f"  [!]  NEW TAB OVERRIDE: {url_overrides['newtab']}")
         
         if findings['search_hijacking']:
             findings['severity'] = findings['search_hijacking']['severity']

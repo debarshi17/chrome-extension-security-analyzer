@@ -44,7 +44,7 @@ class JavaScriptASTAnalyzer:
         if self.config_values:
             print(f"[AST] Resolved {len(self.config_values)} configuration URLs:")
             for key, value in list(self.config_values.items())[:5]:
-                print(f"[AST]   • {key} → {value}")
+                print(f"[AST]   * {key} -> {value}")
         
         # STEP 2: Analyze each file
         for js_file in js_files:
@@ -68,13 +68,13 @@ class JavaScriptASTAnalyzer:
         
         # Print summary
         if all_results['data_exfiltration']:
-            print(f"[AST] 🚨 Found {len(all_results['data_exfiltration'])} data exfiltration pattern(s)")
+            print(f"[AST] [ALERT] Found {len(all_results['data_exfiltration'])} data exfiltration pattern(s)")
             for exfil in all_results['data_exfiltration'][:3]:
                 if exfil['destination'] != 'Unknown':
-                    print(f"[AST]   → {exfil['destination']}")
+                    print(f"[AST]   -> {exfil['destination']}")
         
         if all_results['chrome_api_abuse']:
-            print(f"[AST] ⚠️  Found {len(all_results['chrome_api_abuse'])} chrome API abuse pattern(s)")
+            print(f"[AST] [!]  Found {len(all_results['chrome_api_abuse'])} chrome API abuse pattern(s)")
         
         return all_results
     
@@ -267,7 +267,7 @@ class JavaScriptASTAnalyzer:
         for pattern in patterns:
             if pattern in self.config_values:
                 resolved = self.config_values[pattern]
-                print(f"[AST] Resolved {url_or_ref} → {resolved}")
+                print(f"[AST] Resolved {url_or_ref} -> {resolved}")
                 return resolved
         
         return url_or_ref  # Return as-is if not resolved

@@ -28,7 +28,7 @@ class ExtensionUnpacker:
         crx_path = Path(crx_path)
         
         if not crx_path.exists():
-            print(f"[✗] File not found: {crx_path}")
+            print(f"[[X]] File not found: {crx_path}")
             return None
         
         print(f"\n[+] Unpacking: {crx_path.name}")
@@ -49,7 +49,7 @@ class ExtensionUnpacker:
             with zipfile.ZipFile(crx_path, 'r') as zip_ref:
                 zip_ref.extractall(output_dir)
             
-            print(f"[✓] Extracted to: {output_dir}")
+            print(f"[[OK]] Extracted to: {output_dir}")
             
             # Count files
             file_count = sum(1 for _ in output_dir.rglob('*') if _.is_file())
@@ -62,7 +62,7 @@ class ExtensionUnpacker:
             print("[!] Attempting to strip CRX header...")
             return self._unpack_with_header_strip(crx_path, output_dir)
         except Exception as e:
-            print(f"[✗] Extraction failed: {e}")
+            print(f"[[X]] Extraction failed: {e}")
             return None
     
     def _unpack_with_header_strip(self, crx_path, output_dir):
@@ -81,7 +81,7 @@ class ExtensionUnpacker:
                 magic = f.read(4)
                 
                 if magic != b'Cr24':
-                    print(f"[✗] Invalid CRX magic number: {magic}")
+                    print(f"[[X]] Invalid CRX magic number: {magic}")
                     return None
                 
                 # Read version
@@ -113,11 +113,11 @@ class ExtensionUnpacker:
             # Remove temp file
             temp_zip.unlink()
             
-            print(f"[✓] Extracted to: {output_dir}")
+            print(f"[[OK]] Extracted to: {output_dir}")
             return output_dir
             
         except Exception as e:
-            print(f"[✗] Header strip failed: {e}")
+            print(f"[[X]] Header strip failed: {e}")
             return None
     
     def read_manifest(self, extension_dir):
@@ -134,7 +134,7 @@ class ExtensionUnpacker:
         manifest_path = extension_dir / "manifest.json"
         
         if not manifest_path.exists():
-            print(f"[✗] manifest.json not found in {extension_dir}")
+            print(f"[[X]] manifest.json not found in {extension_dir}")
             return None
         
         try:
@@ -148,7 +148,7 @@ class ExtensionUnpacker:
             return manifest
             
         except Exception as e:
-            print(f"[✗] Failed to read manifest: {e}")
+            print(f"[[X]] Failed to read manifest: {e}")
             return None
     
     def get_file_list(self, extension_dir):

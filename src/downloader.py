@@ -78,15 +78,15 @@ class ExtensionDownloader:
                             f.write(chunk)
             
             file_size = output_path.stat().st_size
-            print(f"[✓] Downloaded: {output_path} ({file_size:,} bytes)")
+            print(f"[[OK]] Downloaded: {output_path} ({file_size:,} bytes)")
             
             return output_path
             
         except requests.exceptions.RequestException as e:
-            print(f"[✗] Download failed: {e}")
+            print(f"[[X]] Download failed: {e}")
             return None
         except Exception as e:
-            print(f"[✗] Unexpected error: {e}")
+            print(f"[[X]] Unexpected error: {e}")
             return None
     
     def download_multiple(self, extension_ids, delay=1):
@@ -148,7 +148,7 @@ class ExtensionDownloader:
             return info
             
         except Exception as e:
-            print(f"[✗] Could not fetch info: {e}")
+            print(f"[[X]] Could not fetch info: {e}")
             return {'id': extension_id, 'available': False}
 
 
@@ -172,7 +172,7 @@ def main():
     # Print results
     print("\nResults:")
     for ext_id, path in results.items():
-        status = "✓" if path else "✗"
+        status = "[OK]" if path else "[X]"
         print(f"  {status} {ext_id}: {path}")
 
 

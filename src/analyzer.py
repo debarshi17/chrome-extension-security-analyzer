@@ -42,47 +42,47 @@ class ChromeExtensionAnalyzer:
             dict: Comprehensive analysis results
         """
         print("=" * 80)
-        print("🔍 CHROME EXTENSION SECURITY ANALYZER")
+        print("[SCAN] CHROME EXTENSION SECURITY ANALYZER")
         print("    Professional Threat Intelligence Edition with VirusTotal")
         print("=" * 80)
         print(f"\n[+] Target Extension ID: {extension_id}\n")
         
         # Step 1: Download
-        print("📥 STEP 1: Downloading extension...")
+        print("[DOWNLOAD] STEP 1: Downloading extension...")
         print("-" * 80)
         crx_path = self.downloader.download_extension(extension_id)
         
         if not crx_path:
-            print("\n[✗] Download failed. Extension may not exist or be unavailable.")
+            print("\n[[X]] Download failed. Extension may not exist or be unavailable.")
             return None
         
         # Step 2: Unpack
-        print("\n📦 STEP 2: Unpacking extension...")
+        print("\n[UNPACK] STEP 2: Unpacking extension...")
         print("-" * 80)
         extension_dir = self.unpacker.unpack(crx_path)
         
         if not extension_dir:
-            print("\n[✗] Unpacking failed.")
+            print("\n[[X]] Unpacking failed.")
             return None
         
         # Read manifest
         manifest = self.unpacker.read_manifest(extension_dir)
         
         if not manifest:
-            print("\n[✗] Failed to read manifest.json")
+            print("\n[[X]] Failed to read manifest.json")
             return None
         
         # Step 3: Static Analysis
-        print("\n🔍 STEP 3: Performing static analysis...")
+        print("\n[SCAN] STEP 3: Performing static analysis...")
         print("-" * 80)
         results = self.analyzer.analyze_extension(extension_dir)
         
         if not results:
-            print("\n[✗] Analysis failed.")
+            print("\n[[X]] Analysis failed.")
             return None
         
         # Step 4: Domain Intelligence Analysis
-        print("\n🌐 STEP 4: Domain intelligence analysis...")
+        print("\n[DOMAIN] STEP 4: Domain intelligence analysis...")
         print("-" * 80)
         domain_intelligence = self._analyze_domain_intelligence(results)
         results['domain_intelligence'] = domain_intelligence
@@ -96,10 +96,10 @@ class ChromeExtensionAnalyzer:
             if len(threats) > 5:
                 print(f"    ... and {len(threats) - 5} more")
         else:
-            print("[✓] No obviously malicious domains detected")
+            print("[[OK]] No obviously malicious domains detected")
         
         # Step 5: VirusTotal Domain Reputation Check
-        print("\n🛡️  STEP 5: VirusTotal domain reputation check...")
+        print("\n[VT]  STEP 5: VirusTotal domain reputation check...")
         print("-" * 80)
         vt_results = self._check_virustotal(results)
 
@@ -109,7 +109,7 @@ class ChromeExtensionAnalyzer:
         print(f"\n[+] Updated Risk Score (with VirusTotal): {results['risk_score']:.1f}/10 ({results['risk_level']})")
 
         # Step 6: Advanced Malware Detection
-        print("\n🔬 STEP 6: Advanced malware detection...")
+        print("\n[ADVANCED] STEP 6: Advanced malware detection...")
         print("-" * 80)
         advanced_findings = self.advanced_detector.run_all_detections(extension_dir)
         results['advanced_detection'] = advanced_findings
@@ -122,10 +122,10 @@ class ChromeExtensionAnalyzer:
             results['risk_score'] = min(10.0, results['risk_score'] + 1.5)
             print(f"[!] HIGH: {advanced_findings['summary']['high_findings']} suspicious technique(s) detected")
         else:
-            print("[✓] No advanced malware techniques detected")
+            print("[[OK]] No advanced malware techniques detected")
 
         # Step 7: PII/Data Classification
-        print("\n🔐 STEP 7: PII/data classification...")
+        print("\n[PII] STEP 7: PII/data classification...")
         print("-" * 80)
         pii_analysis = self._classify_pii_exfiltration(results)
         results['pii_classification'] = pii_analysis
@@ -136,15 +136,15 @@ class ChromeExtensionAnalyzer:
         elif pii_analysis.get('data_types_count', 0) > 0:
             print(f"[!] Accesses {pii_analysis['data_types_count']} type(s) of user data")
         else:
-            print("[✓] No sensitive data exfiltration detected")
+            print("[[OK]] No sensitive data exfiltration detected")
 
         # Step 8: IOC Management
-        print("\n📊 STEP 8: Updating IOC database...")
+        print("\n[IOC] STEP 8: Updating IOC database...")
         print("-" * 80)
         self._update_ioc_database(results, vt_results, extension_id)
 
         # Step 9: Generate Reports
-        print("\n📄 STEP 9: Generating professional reports...")
+        print("\n[REPORT] STEP 9: Generating professional reports...")
         print("-" * 80)
         
         # Save JSON report (detailed data)
@@ -156,7 +156,7 @@ class ChromeExtensionAnalyzer:
         # Print Summary
         self._print_analysis_summary(results)
         
-        print(f"\n📁 Reports generated:")
+        print(f"\n[FILES] Reports generated:")
         print(f"   • JSON (Technical): {json_report}")
         print(f"   • HTML (Professional): {html_report}")
         
@@ -234,9 +234,9 @@ class ChromeExtensionAnalyzer:
         suspicious = [r for r in vt_results if r.get('threat_level') == 'SUSPICIOUS']
         
         if malicious:
-            print(f"\n⚠️  VIRUSTOTAL ALERT: {len(malicious)} MALICIOUS domain(s) detected!")
+            print(f"\n[!]  VIRUSTOTAL ALERT: {len(malicious)} MALICIOUS domain(s) detected!")
             for result in malicious:
-                print(f"    🚨 {result['domain']}")
+                print(f"    [ALERT] {result['domain']}")
                 print(f"       • Detections: {result['stats']['malicious']} vendors")
                 print(f"       • Community: {result['votes']['malicious']} malicious votes")
                 if result.get('malicious_vendors'):
@@ -244,7 +244,7 @@ class ChromeExtensionAnalyzer:
                     print(f"       • Flagged by: {', '.join(vendors)}")
         
         if suspicious:
-            print(f"\n⚠️  VirusTotal: {len(suspicious)} suspicious domain(s)")
+            print(f"\n[!]  VirusTotal: {len(suspicious)} suspicious domain(s)")
             for result in suspicious:
                 print(f"    • {result['domain']} - {result['stats']['suspicious']} flags")
         
@@ -258,45 +258,45 @@ class ChromeExtensionAnalyzer:
         vt_results = results.get('virustotal_results', [])
         
         print("\n" + "=" * 80)
-        print("📊 ANALYSIS COMPLETE")
+        print("[IOC] ANALYSIS COMPLETE")
         print("=" * 80)
-        print(f"\n🎯 Extension: {results['name']}")
-        print(f"📌 Version: {results['version']}")
-        print(f"⚠️  Risk Score: {results['risk_score']:.1f}/10 ({results['risk_level']})")
+        print(f"\n[TARGET] Extension: {results['name']}")
+        print(f"[INFO] Version: {results['version']}")
+        print(f"[!]  Risk Score: {results['risk_score']:.1f}/10 ({results['risk_level']})")
         
         # VirusTotal Results
         malicious_domains = [r for r in vt_results if r.get('threat_level') == 'MALICIOUS']
         if malicious_domains:
-            print(f"\n🚨 VIRUSTOTAL: {len(malicious_domains)} MALICIOUS DOMAIN(S) DETECTED")
+            print(f"\n[ALERT] VIRUSTOTAL: {len(malicious_domains)} MALICIOUS DOMAIN(S) DETECTED")
             for result in malicious_domains[:3]:
-                print(f"   └─ {result['domain']}: {result['stats']['malicious']} detections")
+                print(f"   +- {result['domain']}: {result['stats']['malicious']} detections")
         
         # Campaign Attribution
         if campaign:
-            print(f"\n🚨 CAMPAIGN DETECTED: {campaign['name']}")
-            print(f"   └─ Confidence: {campaign['confidence']} | Severity: {campaign['severity']}")
-            print(f"   └─ Description: {campaign.get('description', 'N/A')}")
+            print(f"\n[ALERT] CAMPAIGN DETECTED: {campaign['name']}")
+            print(f"   +- Confidence: {campaign['confidence']} | Severity: {campaign['severity']}")
+            print(f"   +- Description: {campaign.get('description', 'N/A')}")
             for indicator in campaign.get('indicators', [])[:3]:
                 print(f"      • {indicator}")
             if campaign.get('reference'):
-                print(f"   └─ Reference: {campaign['reference']}")
+                print(f"   +- Reference: {campaign['reference']}")
         
         # Settings Overrides
         if settings.get('has_overrides'):
-            print(f"\n⚠️  BROWSER HIJACKING DETECTED:")
+            print(f"\n[!]  BROWSER HIJACKING DETECTED:")
             
             if settings.get('search_hijacking'):
                 search = settings['search_hijacking']
-                print(f"   └─ Search Engine: {search['search_url']}")
+                print(f"   +- Search Engine: {search['search_url']}")
                 if search.get('affiliate_params'):
                     print(f"      • Affiliate Fraud: {', '.join(search['affiliate_params'])}")
             
             if settings.get('homepage_hijacking'):
-                print(f"   └─ Homepage Override: {settings['homepage_hijacking']['url']}")
+                print(f"   +- Homepage Override: {settings['homepage_hijacking']['url']}")
             
             if settings.get('startup_hijacking'):
                 urls = settings['startup_hijacking']['urls']
-                print(f"   └─ Startup Pages: {len(urls)} page(s)")
+                print(f"   +- Startup Pages: {len(urls)} page(s)")
         
         # Statistics
         permissions = results.get('permissions', {})
@@ -305,7 +305,7 @@ class ChromeExtensionAnalyzer:
         advanced = results.get('advanced_detection', {}).get('summary', {})
         pii = results.get('pii_classification', {})
 
-        print(f"\n📈 Statistics:")
+        print(f"\n[STATS] Statistics:")
         print(f"   • High-Risk Permissions: {len(permissions.get('high_risk', []))}")
         print(f"   • Critical Code Patterns: {len([p for p in patterns if p['severity'] == 'high'])}")
         print(f"   • Suspicious Domains: {len([d for d in domain_intel if d['threat_level'] in ['CRITICAL', 'HIGH']])}")
@@ -325,50 +325,50 @@ class ChromeExtensionAnalyzer:
         print(f"\n{'=' * 80}")
 
         if advanced_critical > 0:
-            print(f"⛔ VERDICT: CONFIRMED MALWARE - ADVANCED TECHNIQUES DETECTED")
-            print(f"   └─ {advanced_critical} confirmed malware technique(s) found")
+            print(f"[BLOCK] VERDICT: CONFIRMED MALWARE - ADVANCED TECHNIQUES DETECTED")
+            print(f"   +- {advanced_critical} confirmed malware technique(s) found")
             # Show specific techniques
             if advanced.get('csp_manipulation'):
-                print(f"   └─ CSP Manipulation: Removes security headers (RCE capability)")
+                print(f"   +- CSP Manipulation: Removes security headers (RCE capability)")
             if advanced.get('dom_event_injection'):
-                print(f"   └─ DOM Event Injection: Remote code execution bypass")
-            print(f"   └─ IMMEDIATE ACTION: Block and quarantine immediately")
-            print(f"   └─ This is confirmed malicious behavior per industry research")
+                print(f"   +- DOM Event Injection: Remote code execution bypass")
+            print(f"   +- IMMEDIATE ACTION: Block and quarantine immediately")
+            print(f"   +- This is confirmed malicious behavior per industry research")
         elif vt_malicious:
-            print(f"⛔ VERDICT: CRITICAL THREAT - VIRUSTOTAL CONFIRMED MALICIOUS")
-            print(f"   └─ {len(vt_malicious)} domain(s) flagged as malicious by security vendors")
-            print(f"   └─ IMMEDIATE ACTION: Block this extension immediately")
-            print(f"   └─ Investigate data compromise on affected systems")
+            print(f"[BLOCK] VERDICT: CRITICAL THREAT - VIRUSTOTAL CONFIRMED MALICIOUS")
+            print(f"   +- {len(vt_malicious)} domain(s) flagged as malicious by security vendors")
+            print(f"   +- IMMEDIATE ACTION: Block this extension immediately")
+            print(f"   +- Investigate data compromise on affected systems")
         elif pii.get('overall_risk') == 'CRITICAL':
-            print(f"⛔ VERDICT: CRITICAL THREAT - EXFILTRATES SENSITIVE DATA")
-            print(f"   └─ Exfiltrates {pii.get('data_types_count', 0)} type(s) of critical data")
-            print(f"   └─ {pii.get('recommendation', {}).get('action', 'BLOCK IMMEDIATELY')}")
-            print(f"   └─ IMMEDIATE ACTION: Remove and investigate data access")
+            print(f"[BLOCK] VERDICT: CRITICAL THREAT - EXFILTRATES SENSITIVE DATA")
+            print(f"   +- Exfiltrates {pii.get('data_types_count', 0)} type(s) of critical data")
+            print(f"   +- {pii.get('recommendation', {}).get('action', 'BLOCK IMMEDIATELY')}")
+            print(f"   +- IMMEDIATE ACTION: Remove and investigate data access")
         elif campaign:
-            print(f"⛔ VERDICT: CRITICAL THREAT - KNOWN MALICIOUS CAMPAIGN")
-            print(f"   └─ Campaign: {campaign['name']}")
-            print(f"   └─ IMMEDIATE ACTION: Block across all enterprise devices")
-            print(f"   └─ Investigate potential data compromise")
+            print(f"[BLOCK] VERDICT: CRITICAL THREAT - KNOWN MALICIOUS CAMPAIGN")
+            print(f"   +- Campaign: {campaign['name']}")
+            print(f"   +- IMMEDIATE ACTION: Block across all enterprise devices")
+            print(f"   +- Investigate potential data compromise")
         elif risk_level == 'CRITICAL':
-            print(f"⛔ VERDICT: CRITICAL RISK - BLOCK IMMEDIATELY")
-            print(f"   └─ This extension poses a severe security threat")
-            print(f"   └─ Do NOT deploy under any circumstances")
+            print(f"[BLOCK] VERDICT: CRITICAL RISK - BLOCK IMMEDIATELY")
+            print(f"   +- This extension poses a severe security threat")
+            print(f"   +- Do NOT deploy under any circumstances")
         elif risk_level == 'HIGH':
-            print(f"🚨 VERDICT: HIGH RISK - BLOCK THIS EXTENSION")
-            print(f"   └─ Significant security concerns detected")
-            print(f"   └─ Not recommended for deployment")
+            print(f"[ALERT] VERDICT: HIGH RISK - BLOCK THIS EXTENSION")
+            print(f"   +- Significant security concerns detected")
+            print(f"   +- Not recommended for deployment")
         elif risk_level == 'MEDIUM':
-            print(f"⚠️  VERDICT: MEDIUM RISK - MANUAL REVIEW REQUIRED")
-            print(f"   └─ Security review recommended before deployment")
-            print(f"   └─ Test in isolated environment first")
+            print(f"[!]  VERDICT: MEDIUM RISK - MANUAL REVIEW REQUIRED")
+            print(f"   +- Security review recommended before deployment")
+            print(f"   +- Test in isolated environment first")
         elif risk_level == 'LOW':
-            print(f"⚡ VERDICT: LOW RISK - MONITOR")
-            print(f"   └─ Extension appears relatively safe")
-            print(f"   └─ Monitor for updates and behavioral changes")
+            print(f"[WARN] VERDICT: LOW RISK - MONITOR")
+            print(f"   +- Extension appears relatively safe")
+            print(f"   +- Monitor for updates and behavioral changes")
         else:
-            print(f"✅ VERDICT: MINIMAL RISK")
-            print(f"   └─ No significant threats detected")
-            print(f"   └─ Safe for deployment with standard monitoring")
+            print(f"[OK] VERDICT: MINIMAL RISK")
+            print(f"   +- No significant threats detected")
+            print(f"   +- Safe for deployment with standard monitoring")
         
         print(f"{'=' * 80}\n")
 
@@ -392,7 +392,12 @@ class ChromeExtensionAnalyzer:
         )
 
         for perm_data in all_permissions:
-            perm = perm_data.get('permission', '')
+            # Handle both string and dict formats
+            if isinstance(perm_data, str):
+                perm = perm_data
+            else:
+                perm = perm_data.get('permission', '')
+
             # Add Chrome API equivalents
             if perm in ['cookies', 'webRequest', 'history', 'tabs', 'clipboardRead', 'geolocation']:
                 evidence['chrome_apis'].append(f'chrome.{perm}')
@@ -456,12 +461,16 @@ class ChromeExtensionAnalyzer:
             ]
 
             suspicious_patterns = [
-                p['pattern'] for p in results.get('malicious_patterns', [])
+                p.get('name', p.get('pattern', 'Unknown'))
+                for p in results.get('malicious_patterns', [])
                 if p.get('severity') == 'high'
             ]
 
+            # Handle both string and dict formats for permissions
+            high_risk_perms = results.get('permissions', {}).get('high_risk', [])
             dangerous_permissions = [
-                p['permission'] for p in results.get('permissions', {}).get('high_risk', [])
+                p if isinstance(p, str) else p.get('permission', '')
+                for p in high_risk_perms
             ]
 
             extension_data = {
@@ -496,12 +505,12 @@ Examples:
   python src/analyzer.py eebihieclccoidddmjcencomodomdoei
   
 Features:
-  ✓ VirusTotal domain reputation checking
-  ✓ Campaign attribution (DarkSpectre, ZoomStealer, etc.)
-  ✓ Domain intelligence (C2, DGA, typosquatting detection)
-  ✓ Professional threat intelligence reports
-  ✓ Detailed permission analysis
-  ✓ Deep code pattern detection
+  [OK] VirusTotal domain reputation checking
+  [OK] Campaign attribution (DarkSpectre, ZoomStealer, etc.)
+  [OK] Domain intelligence (C2, DGA, typosquatting detection)
+  [OK] Professional threat intelligence reports
+  [OK] Detailed permission analysis
+  [OK] Deep code pattern detection
         """
     )
     
@@ -524,15 +533,15 @@ Features:
         print(f"[!] Provided ID: {args.extension_id} ({len(args.extension_id)} characters)")
         response = input("[?] Continue anyway? (y/n): ")
         if response.lower() != 'y':
-            print("[✗] Aborted.")
+            print("[[X]] Aborted.")
             sys.exit(1)
     
     # Run analysis
     print("""
-    ╔════════════════════════════════════════════════════════════════════╗
-    ║   CHROME EXTENSION SECURITY ANALYZER - PROFESSIONAL EDITION       ║
-    ║   Threat Intelligence Platform with VirusTotal Integration        ║
-    ╚════════════════════════════════════════════════════════════════════╝
+    ========================================================================
+       CHROME EXTENSION SECURITY ANALYZER - PROFESSIONAL EDITION
+       Threat Intelligence Platform with VirusTotal Integration
+    ========================================================================
     """)
     
     analyzer = ChromeExtensionAnalyzer()
