@@ -802,15 +802,31 @@ class ProfessionalReportGenerator:
         
         # IOC Section
         html += self._generate_ioc_section(results)
-        
+
         # VirusTotal Results (CRITICAL)
         if vt_results:
             html += self._generate_virustotal_section(vt_results)
-        
+
+        # Advanced Malware Detection (NEW)
+        advanced_detection = results.get('advanced_detection')
+        if advanced_detection:
+            html += self._generate_advanced_detection_section(advanced_detection)
+
+        # PII/Data Classification (NEW)
+        pii_classification = results.get('pii_classification')
+        if pii_classification:
+            html += self._generate_pii_classification_section(pii_classification)
+
+        # IOC Database Cross-Reference (NEW)
+        extension_id = results.get('extension_id', 'unknown')
+        from ioc_manager import IOCManager
+        ioc_manager = IOCManager()
+        html += self._generate_ioc_database_section(extension_id, ioc_manager)
+
         # Domain Intelligence
         if domain_intel:
             html += self._generate_domain_intelligence_section(domain_intel)
-        
+
         # Technical Details
         html += self._generate_technical_details(results)
         
@@ -1514,7 +1530,269 @@ class ProfessionalReportGenerator:
         code_line = re.sub(r'(//.*$)', r'<span class="code-comment">\1</span>', code_line)
         
         return code_line
-    
+
+    def _generate_pii_classification_section(self, pii_data):
+        """Generate PII/Data Classification section"""
+
+        if not pii_data or pii_data.get('data_types_count', 0) == 0:
+            return ""
+
+        overall_risk = pii_data.get('overall_risk', 'LOW')
+        risk_color = self._get_risk_color(overall_risk)
+        classifications = pii_data.get('classifications', [])
+        recommendation = pii_data.get('recommendation', {})
+        destination = pii_data.get('destination', 'Unknown')
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔐</div>
+                <div class="section-title">PII/Sensitive Data Classification</div>
+            </div>
+            <div class="subsection">
+                <div class="alert alert-{overall_risk.lower()}">
+                    <div class="alert-icon">{'🚨' if overall_risk == 'CRITICAL' else '⚠️'  if overall_risk in ['HIGH', 'MEDIUM'] else 'ℹ️'}</div>
+                    <div>
+                        <strong>Overall Risk:</strong> {overall_risk}<br>
+                        <strong>Destination:</strong> <code>{destination}</code><br>
+                        <strong>Data Types Detected:</strong> {pii_data.get('data_types_count', 0)}<br>
+                        <strong>Total Severity Score:</strong> {pii_data.get('total_severity_score', 0)}/10
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 20px;">Classified Data Types</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 15px;">
+"""
+
+        for classification in classifications:
+            category = classification['category']
+            risk = classification['risk']
+            severity = classification['severity_score']
+            description = classification['description']
+            impact = classification['impact']
+
+            risk_badge_color = self._get_risk_color(risk)
+
+            html += f"""
+                    <div class="finding-card" style="border-left: 4px solid {risk_badge_color};">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <h4 style="margin: 0; font-size: 14px; font-weight: 600;">{category.replace('_', ' ')}</h4>
+                            <span class="badge" style="background: {risk_badge_color}; color: white; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600;">{risk} ({severity}/10)</span>
+                        </div>
+                        <p style="margin: 8px 0; font-size: 13px; color: #64748b;"><strong>Risk:</strong> {description}</p>
+                        <p style="margin: 0; font-size: 12px; color: #94a3b8;"><strong>Impact:</strong> {impact}</p>
+"""
+
+            # Show detection method
+            if classification.get('matched_api'):
+                html += f'<p style="margin-top: 8px; font-size: 12px;"><strong>Detected via:</strong> <code style="background: #f1f5f9; padding: 2px 6px; border-radius: 3px; font-size: 11px;">chrome.{classification["matched_api"]}</code></p>'
+            elif classification.get('matched_patterns'):
+                patterns = ', '.join(classification['matched_patterns'][:2])
+                html += f'<p style="margin-top: 8px; font-size: 12px;"><strong>Matched patterns:</strong> <code style="background: #f1f5f9; padding: 2px 6px; border-radius: 3px; font-size: 11px;">{patterns}</code></p>'
+
+            html += """
+                    </div>
+"""
+
+        html += f"""
+                </div>
+
+                <div class="alert alert-{overall_risk.lower()}" style="margin-top: 20px;">
+                    <div class="alert-icon">🛡️</div>
+                    <div>
+                        <h4 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">Recommendation</h4>
+                        <p style="margin: 0; font-size: 13px;"><strong>Action:</strong> {recommendation.get('action', 'REVIEW')}</p>
+                        <p style="margin: 5px 0; font-size: 13px;"><strong>Priority:</strong> {recommendation.get('priority', 'Unknown')}</p>
+                        <p style="margin: 5px 0 10px 0; font-size: 13px;">{recommendation.get('rationale', '')}</p>
+                        <p style="margin: 0; font-size: 12px; font-weight: 600;">Next Steps:</p>
+                        <ul style="margin: 5px 0 0 20px; font-size: 12px;">
+"""
+
+        for step in recommendation.get('next_steps', []):
+            html += f'<li style="margin: 3px 0;">{step}</li>'
+
+        html += """
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+"""
+        return html
+
+    def _generate_advanced_detection_section(self, advanced_data):
+        """Generate Advanced Malware Detection section"""
+
+        if not advanced_data:
+            return ""
+
+        summary = advanced_data.get('summary', {})
+        total = summary.get('total_findings', 0)
+
+        if total == 0:
+            return ""
+
+        verdict = summary.get('verdict', 'CLEAN')
+        critical = summary.get('critical_findings', 0)
+        high = summary.get('high_findings', 0)
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔬</div>
+                <div class="section-title">Advanced Malware Detection</div>
+            </div>
+            <div class="subsection">
+                <div class="alert alert-{'critical' if critical > 0 else 'high' if high > 0 else 'medium'}">
+                    <div class="alert-icon">{'🚨' if critical > 0 else '⚠️'}</div>
+                    <div>
+                        <strong>Detection Verdict:</strong> {verdict}<br>
+                        <strong>Total Findings:</strong> {total} ({critical} critical, {high} high)<br>
+                        <strong>Analysis:</strong> Based on Wladimir Palant's advanced malware research
+                    </div>
+                </div>
+"""
+
+        # CSP Manipulation
+        csp_findings = advanced_data.get('csp_manipulation', [])
+        if csp_findings:
+            html += """
+                <h3 style="margin-top: 20px; color: var(--color-critical);">⛔ CSP Manipulation Attack (CONFIRMED MALWARE)</h3>
+                <p style="margin: 10px 0; font-size: 13px;">Removes Content-Security-Policy headers to enable remote code injection. This is a <strong>confirmed malicious technique</strong>.</p>
+"""
+            for finding in csp_findings[:3]:
+                html += f"""
+                <div class="finding-card" style="border-left: 4px solid var(--color-critical); background: #fef2f2;">
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px; color: var(--color-critical);">{finding['type']}</h4>
+                    <p style="margin: 5px 0; font-size: 13px;"><strong>Severity:</strong> {finding['severity']}</p>
+                    <p style="margin: 5px 0; font-size: 13px;"><strong>Impact:</strong> {finding['impact']}</p>
+                    <p style="margin: 5px 0; font-size: 12px; background: #f1f5f9; padding: 8px; border-radius: 4px;"><strong>Evidence:</strong> {finding['evidence'].get('file', 'N/A')}</p>
+                    <p style="margin: 5px 0; font-size: 12px; color: var(--color-critical); font-weight: 600;">{finding['recommendation']}</p>
+                </div>
+"""
+
+        # DOM Event Injection
+        dom_findings = advanced_data.get('dom_event_injection', [])
+        if dom_findings:
+            html += """
+                <h3 style="margin-top: 20px; color: var(--color-critical);">🚨 DOM Event Injection (Remote Code Execution)</h3>
+                <p style="margin: 10px 0; font-size: 13px;">Uses DOM event handlers to execute remote code, bypassing Manifest V3 restrictions.</p>
+"""
+            for finding in dom_findings[:2]:
+                html += f"""
+                <div class="finding-card" style="border-left: 4px solid var(--color-critical);">
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px;">{finding['type']}</h4>
+                    <p style="margin: 5px 0; font-size: 13px;"><strong>Technique:</strong> {finding.get('technique', 'N/A')}</p>
+                    <p style="margin: 5px 0; font-size: 12px;"><strong>Indicators:</strong> {', '.join(finding['evidence'].get('indicators_found', []))}</p>
+                    <p style="margin: 5px 0; font-size: 12px;"><strong>File:</strong> <code>{finding['evidence'].get('file', 'N/A')}</code></p>
+                </div>
+"""
+
+        # WebSocket C2
+        ws_findings = advanced_data.get('websocket_c2', [])
+        if ws_findings:
+            html += """
+                <h3 style="margin-top: 20px; color: var(--color-high);">📡 WebSocket Command & Control</h3>
+"""
+            for finding in ws_findings[:3]:
+                html += f"""
+                <div class="finding-card" style="border-left: 4px solid var(--color-high);">
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px;">{finding['type']}</h4>
+                    <p style="margin: 5px 0; font-size: 13px;"><strong>WebSocket URL:</strong> <code>{finding['evidence'].get('websocket_url', 'N/A')}</code></p>
+                    <p style="margin: 5px 0; font-size: 12px;"><strong>Suspicion Reasons:</strong> {', '.join(finding['evidence'].get('suspicion_reasons', []))}</p>
+                </div>
+"""
+
+        # Delayed Activation
+        delay_findings = advanced_data.get('delayed_activation', [])
+        if delay_findings:
+            html += """
+                <h3 style="margin-top: 20px; color: var(--color-high);">⏰ Delayed Activation (Time Bomb)</h3>
+"""
+            for finding in delay_findings[:2]:
+                html += f"""
+                <div class="finding-card" style="border-left: 4px solid var(--color-high);">
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px;">{finding['type']}</h4>
+                    <p style="margin: 5px 0; font-size: 13px;"><strong>Impact:</strong> {finding['impact']}</p>
+                    <p style="margin: 5px 0; font-size: 12px;"><strong>Indicators:</strong> {', '.join(finding['evidence'].get('indicators_found', []))}</p>
+                </div>
+"""
+
+        # Obfuscation
+        obf_findings = advanced_data.get('obfuscation', [])
+        if obf_findings:
+            html += """
+                <h3 style="margin-top: 20px; color: var(--color-medium);">🔒 Code Obfuscation</h3>
+"""
+            for finding in obf_findings[:2]:
+                html += f"""
+                <div class="finding-card" style="border-left: 4px solid var(--color-medium);">
+                    <h4 style="margin: 0 0 8px 0; font-size: 14px;">{finding['type']}</h4>
+                    <p style="margin: 5px 0; font-size: 12px;"><strong>Techniques:</strong> {', '.join(finding['evidence'].get('obfuscation_techniques', []))}</p>
+                    <p style="margin: 5px 0; font-size: 12px;"><strong>File:</strong> <code>{finding['evidence'].get('file', 'N/A')}</code></p>
+                </div>
+"""
+
+        html += """
+            </div>
+        </div>
+"""
+        return html
+
+    def _generate_ioc_database_section(self, extension_id, ioc_manager):
+        """Generate IOC Database Cross-Reference section"""
+
+        try:
+            # Check if extension is in IOC database
+            extension_ioc = ioc_manager.check_extension(extension_id)
+
+            if not extension_ioc:
+                return ""  # Don't show section if not in IOC database
+
+            html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📊</div>
+                <div class="section-title">IOC Database Cross-Reference</div>
+            </div>
+            <div class="subsection">
+                <div class="alert alert-critical">
+                    <div class="alert-icon">🚨</div>
+                    <div>
+                        <strong>WARNING:</strong> This extension has been previously flagged in our IOC database<br>
+                        <strong>First Analyzed:</strong> {extension_ioc.get('first_analyzed', 'Unknown')}<br>
+                        <strong>Risk Score:</strong> {extension_ioc.get('risk_score', 0):.1f}/10
+                    </div>
+                </div>
+
+                <h3 style="margin-top: 20px;">Previous Findings</h3>
+                <div class="finding-card">
+                    <p style="margin: 5px 0; font-size: 13px;"><strong>Malicious Domains:</strong> {len(extension_ioc.get('malicious_domains', []))}</p>
+                    <div style="margin: 10px 0;">
+"""
+
+            for domain in extension_ioc.get('malicious_domains', [])[:5]:
+                html += f'<code style="display: block; margin: 3px 0; padding: 6px; background: #fef2f2; border-radius: 4px; font-size: 12px;">{domain}</code>'
+
+            html += f"""
+                    </div>
+                    <p style="margin: 10px 0 5px 0; font-size: 13px;"><strong>Dangerous Permissions:</strong></p>
+                    <ul style="margin: 0 0 0 20px; font-size: 12px;">
+"""
+
+            for perm in extension_ioc.get('dangerous_permissions', [])[:5]:
+                html += f'<li>{perm}</li>'
+
+            html += """
+                    </ul>
+                </div>
+            </div>
+        </div>
+"""
+            return html
+        except:
+            return ""
+
     def _generate_recommendations_section(self, results, threat_class):
         """Generate recommendations"""
         

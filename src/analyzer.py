@@ -13,6 +13,9 @@ from static_analyzer import EnhancedStaticAnalyzer
 from domain_intelligence import DomainIntelligence
 from professional_report import ProfessionalReportGenerator
 from virustotal_checker import VirusTotalChecker
+from pii_classifier import PIIClassifier
+from ioc_manager import IOCManager
+from advanced_detection import AdvancedDetector
 
 class ChromeExtensionAnalyzer:
     """Main analyzer orchestrator with professional-grade analysis"""
@@ -24,6 +27,9 @@ class ChromeExtensionAnalyzer:
         self.domain_intel = DomainIntelligence()
         self.reporter = ProfessionalReportGenerator()
         self.vt_checker = VirusTotalChecker()
+        self.pii_classifier = PIIClassifier()
+        self.ioc_manager = IOCManager()
+        self.advanced_detector = AdvancedDetector()
     
     def analyze_extension(self, extension_id):
         """
@@ -96,14 +102,49 @@ class ChromeExtensionAnalyzer:
         print("\n🛡️  STEP 5: VirusTotal domain reputation check...")
         print("-" * 80)
         vt_results = self._check_virustotal(results)
-        
+
         # Update risk score based on VT results
         results = self.analyzer.update_risk_with_virustotal(results, vt_results)
-        
+
         print(f"\n[+] Updated Risk Score (with VirusTotal): {results['risk_score']:.1f}/10 ({results['risk_level']})")
-        
-        # Step 6: Generate Reports
-        print("\n📄 STEP 6: Generating professional reports...")
+
+        # Step 6: Advanced Malware Detection
+        print("\n🔬 STEP 6: Advanced malware detection...")
+        print("-" * 80)
+        advanced_findings = self.advanced_detector.run_all_detections(extension_dir)
+        results['advanced_detection'] = advanced_findings
+
+        # Update risk score based on advanced detection
+        if advanced_findings['summary']['critical_findings'] > 0:
+            results['risk_score'] = min(10.0, results['risk_score'] + 3.0)
+            print(f"[!] CRITICAL: {advanced_findings['summary']['critical_findings']} confirmed malware technique(s) detected!")
+        elif advanced_findings['summary']['high_findings'] > 0:
+            results['risk_score'] = min(10.0, results['risk_score'] + 1.5)
+            print(f"[!] HIGH: {advanced_findings['summary']['high_findings']} suspicious technique(s) detected")
+        else:
+            print("[✓] No advanced malware techniques detected")
+
+        # Step 7: PII/Data Classification
+        print("\n🔐 STEP 7: PII/data classification...")
+        print("-" * 80)
+        pii_analysis = self._classify_pii_exfiltration(results)
+        results['pii_classification'] = pii_analysis
+
+        if pii_analysis.get('overall_risk') == 'CRITICAL':
+            print(f"[!] CRITICAL: Exfiltrates {pii_analysis['data_types_count']} type(s) of sensitive data")
+            print(f"    Action: {pii_analysis['recommendation']['action']}")
+        elif pii_analysis.get('data_types_count', 0) > 0:
+            print(f"[!] Accesses {pii_analysis['data_types_count']} type(s) of user data")
+        else:
+            print("[✓] No sensitive data exfiltration detected")
+
+        # Step 8: IOC Management
+        print("\n📊 STEP 8: Updating IOC database...")
+        print("-" * 80)
+        self._update_ioc_database(results, vt_results, extension_id)
+
+        # Step 9: Generate Reports
+        print("\n📄 STEP 9: Generating professional reports...")
         print("-" * 80)
         
         # Save JSON report (detailed data)
@@ -261,26 +302,48 @@ class ChromeExtensionAnalyzer:
         permissions = results.get('permissions', {})
         patterns = results.get('malicious_patterns', [])
         domain_intel = results.get('domain_intelligence', [])
-        
+        advanced = results.get('advanced_detection', {}).get('summary', {})
+        pii = results.get('pii_classification', {})
+
         print(f"\n📈 Statistics:")
         print(f"   • High-Risk Permissions: {len(permissions.get('high_risk', []))}")
         print(f"   • Critical Code Patterns: {len([p for p in patterns if p['severity'] == 'high'])}")
         print(f"   • Suspicious Domains: {len([d for d in domain_intel if d['threat_level'] in ['CRITICAL', 'HIGH']])}")
         print(f"   • VirusTotal Malicious: {len(malicious_domains)}")
+        print(f"   • Advanced Techniques: {advanced.get('critical_findings', 0)} critical, {advanced.get('high_findings', 0)} high")
+        print(f"   • PII Data Types: {pii.get('data_types_count', 0)} ({pii.get('overall_risk', 'NONE')} risk)")
     def _print_verdict(self, results):
         """Print final verdict"""
-        
+
         campaign = results.get('campaign_attribution')
         risk_level = results.get('risk_level')
         vt_malicious = [r for r in results.get('virustotal_results', []) if r.get('threat_level') == 'MALICIOUS']
-        
+        advanced = results.get('advanced_detection', {})
+        advanced_critical = advanced.get('summary', {}).get('critical_findings', 0)
+        pii = results.get('pii_classification', {})
+
         print(f"\n{'=' * 80}")
-        
-        if vt_malicious:
+
+        if advanced_critical > 0:
+            print(f"⛔ VERDICT: CONFIRMED MALWARE - ADVANCED TECHNIQUES DETECTED")
+            print(f"   └─ {advanced_critical} confirmed malware technique(s) found")
+            # Show specific techniques
+            if advanced.get('csp_manipulation'):
+                print(f"   └─ CSP Manipulation: Removes security headers (RCE capability)")
+            if advanced.get('dom_event_injection'):
+                print(f"   └─ DOM Event Injection: Remote code execution bypass")
+            print(f"   └─ IMMEDIATE ACTION: Block and quarantine immediately")
+            print(f"   └─ This is confirmed malicious behavior per industry research")
+        elif vt_malicious:
             print(f"⛔ VERDICT: CRITICAL THREAT - VIRUSTOTAL CONFIRMED MALICIOUS")
             print(f"   └─ {len(vt_malicious)} domain(s) flagged as malicious by security vendors")
             print(f"   └─ IMMEDIATE ACTION: Block this extension immediately")
             print(f"   └─ Investigate data compromise on affected systems")
+        elif pii.get('overall_risk') == 'CRITICAL':
+            print(f"⛔ VERDICT: CRITICAL THREAT - EXFILTRATES SENSITIVE DATA")
+            print(f"   └─ Exfiltrates {pii.get('data_types_count', 0)} type(s) of critical data")
+            print(f"   └─ {pii.get('recommendation', {}).get('action', 'BLOCK IMMEDIATELY')}")
+            print(f"   └─ IMMEDIATE ACTION: Remove and investigate data access")
         elif campaign:
             print(f"⛔ VERDICT: CRITICAL THREAT - KNOWN MALICIOUS CAMPAIGN")
             print(f"   └─ Campaign: {campaign['name']}")
@@ -308,6 +371,114 @@ class ChromeExtensionAnalyzer:
             print(f"   └─ Safe for deployment with standard monitoring")
         
         print(f"{'=' * 80}\n")
+
+    def _classify_pii_exfiltration(self, results):
+        """Classify PII/sensitive data being accessed or exfiltrated"""
+
+        # Gather evidence for classification
+        evidence = {
+            'chrome_apis': [],
+            'code_snippets': [],
+            'destination': 'Unknown',
+            'method': 'Unknown'
+        }
+
+        # Extract Chrome API usage from permissions
+        permissions = results.get('permissions', {})
+        all_permissions = (
+            permissions.get('high_risk', []) +
+            permissions.get('medium_risk', []) +
+            permissions.get('low_risk', [])
+        )
+
+        for perm_data in all_permissions:
+            perm = perm_data.get('permission', '')
+            # Add Chrome API equivalents
+            if perm in ['cookies', 'webRequest', 'history', 'tabs', 'clipboardRead', 'geolocation']:
+                evidence['chrome_apis'].append(f'chrome.{perm}')
+
+        # Extract code evidence from malicious patterns
+        patterns = results.get('malicious_patterns', [])
+        for pattern in patterns:
+            if pattern.get('evidence'):
+                evidence['code_snippets'].append(pattern['evidence'])
+
+        # Get AST analysis for better destination info
+        ast_analysis = results.get('ast_analysis', {})
+        data_flows = ast_analysis.get('data_flows', [])
+
+        if data_flows:
+            # Use first POST destination
+            for flow in data_flows:
+                if flow.get('destination') != 'Unknown':
+                    evidence['destination'] = flow['destination']
+                    evidence['method'] = flow.get('method', 'POST')
+                    break
+
+        # Also check external scripts for destinations
+        if evidence['destination'] == 'Unknown':
+            external_scripts = results.get('external_scripts', [])
+            if external_scripts:
+                evidence['destination'] = external_scripts[0].get('url', 'Unknown')
+
+        # Perform classification
+        classification = self.pii_classifier.classify_exfiltration(evidence)
+
+        return classification
+
+    def _update_ioc_database(self, results, vt_results, extension_id):
+        """Update IOC database with findings"""
+
+        # Add domains to IOC database if they're malicious
+        pii_classifications = results.get('pii_classification', {}).get('classifications', [])
+
+        for vt_result in vt_results:
+            if vt_result.get('available') and vt_result.get('known'):
+                added = self.ioc_manager.add_domain_ioc(
+                    vt_result,
+                    extension_id,
+                    pii_classifications
+                )
+
+                if added:
+                    domain = vt_result.get('domain')
+                    # Check if domain was already in IOC database
+                    ioc_entry = self.ioc_manager.check_domain(domain)
+                    if ioc_entry and ioc_entry.get('total_observations', 1) > 1:
+                        print(f"[!] Domain {domain} was previously flagged (observation #{ioc_entry['total_observations']})")
+
+        # Add extension to IOC database if high risk
+        risk_score = results.get('risk_score', 0)
+        if risk_score >= 6.0:
+            malicious_domains = [
+                r['domain'] for r in vt_results
+                if r.get('threat_level') == 'MALICIOUS'
+            ]
+
+            suspicious_patterns = [
+                p['pattern'] for p in results.get('malicious_patterns', [])
+                if p.get('severity') == 'high'
+            ]
+
+            dangerous_permissions = [
+                p['permission'] for p in results.get('permissions', {}).get('high_risk', [])
+            ]
+
+            extension_data = {
+                'extension_id': extension_id,
+                'name': results.get('name', 'Unknown'),
+                'version': results.get('version', 'Unknown'),
+                'risk_score': risk_score,
+                'malicious_domains': malicious_domains,
+                'suspicious_patterns': suspicious_patterns[:10],  # Top 10
+                'dangerous_permissions': dangerous_permissions
+            }
+
+            self.ioc_manager.add_extension_ioc(extension_data)
+
+        # Print IOC stats
+        stats = self.ioc_manager.get_statistics()
+        print(f"[IOC] Database now contains {stats['total_domains']} domains, {stats['total_extensions']} extensions")
 
 
 def main():
