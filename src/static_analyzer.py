@@ -152,11 +152,11 @@ class EnhancedStaticAnalyzer:
                 'technique': 'Credential theft'
             },
             {
-                'name': 'Keylogger Pattern',
-                'pattern': r'addEventListener\s*\(\s*["\']key(press|down)["\']',
-                'severity': 'high',
-                'description': 'Captures keyboard input (keylogger)',
-                'technique': 'Credential theft'
+                'name': 'Keyboard Event Listener',
+                'pattern': r'addEventListener\s*\(\s*["\']key(press|down|up)["\']',
+                'severity': 'medium',
+                'description': 'Registers keyboard event listeners (review for legitimacy - may be for shortcuts or malicious keylogging)',
+                'technique': 'Input monitoring'
             },
             {
                 'name': 'WebAssembly (Potential Crypto Mining)',
@@ -179,8 +179,446 @@ class EnhancedStaticAnalyzer:
                 'description': 'Accesses browser local storage',
                 'technique': 'Data persistence'
             },
+            # Screen Capture Detection (KOI Security SpyVPN research)
+            {
+                'name': 'Screen Capture via captureVisibleTab',
+                'pattern': r'chrome\.tabs\.captureVisibleTab\s*\(',
+                'severity': 'critical',
+                'description': 'CAPTURES SCREENSHOTS of browser tabs - can steal passwords, banking info, personal messages displayed on screen',
+                'technique': 'Screen capture/surveillance'
+            },
+            {
+                'name': 'Desktop Capture API',
+                'pattern': r'chrome\.desktopCapture\.',
+                'severity': 'critical',
+                'description': 'Captures desktop screen content - severe privacy violation',
+                'technique': 'Screen capture/surveillance'
+            },
+            {
+                'name': 'Tab Capture API',
+                'pattern': r'chrome\.tabCapture\.',
+                'severity': 'critical',
+                'description': 'Captures tab audio/video stream - can record user activity',
+                'technique': 'Screen capture/surveillance'
+            },
+            # Code Injection Detection
+            {
+                'name': 'Remote Script Injection via executeScript',
+                'pattern': r'chrome\.scripting\.executeScript\s*\(',
+                'severity': 'high',
+                'description': 'Injects JavaScript into web pages - can steal data or modify page content',
+                'technique': 'Code injection'
+            },
+            {
+                'name': 'Legacy Script Injection (tabs.executeScript)',
+                'pattern': r'chrome\.tabs\.executeScript\s*\(',
+                'severity': 'high',
+                'description': 'Legacy method to inject scripts into pages - review for malicious use',
+                'technique': 'Code injection'
+            },
+            {
+                'name': 'CSS Injection',
+                'pattern': r'chrome\.scripting\.insertCSS\s*\(',
+                'severity': 'medium',
+                'description': 'Injects CSS into pages - can be used to hide or modify UI elements',
+                'technique': 'UI manipulation'
+            },
+            # Screenshot-related message handlers
+            {
+                'name': 'Screenshot Capture Message Handler',
+                'pattern': r'["\']capture(Viewport|Screen|Tab|Image)["\']',
+                'severity': 'high',
+                'description': 'Handles screenshot capture requests - may capture sensitive screen content',
+                'technique': 'Screen capture/surveillance'
+            },
+            {
+                'name': 'Canvas to Data URL (Screenshot Export)',
+                'pattern': r'\.toDataURL\s*\([^)]*image',
+                'severity': 'medium',
+                'description': 'Converts canvas to image data - often used to export captured screenshots',
+                'technique': 'Data exfiltration'
+            },
+            {
+                'name': 'html2canvas Screenshot Library',
+                'pattern': r'html2canvas\s*\(',
+                'severity': 'high',
+                'description': 'Uses html2canvas library to capture full-page screenshots',
+                'technique': 'Screen capture/surveillance'
+            },
+            # Screenshot & Media Exfiltration Patterns
+            {
+                'name': 'FormData Screenshot Upload',
+                'pattern': r'formData\.append\s*\([^)]*screenshot',
+                'severity': 'critical',
+                'description': 'Uploads screenshot data via FormData - likely exfiltrating captured screen content',
+                'technique': 'Screenshot exfiltration'
+            },
+            {
+                'name': 'FormData Image Blob Upload',
+                'pattern': r'formData\.append\s*\([^)]*\.(jpg|jpeg|png|gif|webp)["\']',
+                'severity': 'high',
+                'description': 'Uploads image file via FormData - may be exfiltrating screenshots or captured media',
+                'technique': 'Image exfiltration'
+            },
+            {
+                'name': 'DataURL to Blob Conversion',
+                'pattern': r'fetch\s*\(\s*dataUrl',
+                'severity': 'medium',
+                'description': 'Converts dataURL to blob - commonly used to process captured screenshots for upload',
+                'technique': 'Data conversion'
+            },
+            # User/Device Tracking Patterns
+            {
+                'name': 'Persistent Machine ID Generation',
+                'pattern': r'machine-id|machineId|device-id|deviceId',
+                'severity': 'medium',
+                'description': 'Generates or stores persistent device identifier - may track user across sessions',
+                'technique': 'Device fingerprinting'
+            },
+            {
+                'name': 'Random ID Generation for Tracking',
+                'pattern': r'Math\.random\(\)\.toString\(\d+\)\.slice',
+                'severity': 'low',
+                'description': 'Generates random identifier - review context for tracking purposes',
+                'technique': 'ID generation'
+            },
+            {
+                'name': 'Tab URL Exfiltration',
+                'pattern': r'sender\.tab\.url|tab\.url',
+                'severity': 'medium',
+                'description': 'Accesses tab URL - may be collecting browsing history',
+                'technique': 'URL tracking'
+            },
+            # Encrypted Data Exfiltration
+            {
+                'name': 'Embedded RSA Public Key',
+                'pattern': r'-----BEGIN PUBLIC KEY-----',
+                'severity': 'high',
+                'description': 'Embeds RSA public key - may encrypt exfiltrated data to evade detection',
+                'technique': 'Encrypted exfiltration'
+            },
+            {
+                'name': 'RSA-OAEP Key Import',
+                'pattern': r'RSA-OAEP',
+                'severity': 'high',
+                'description': 'Imports RSA-OAEP key for encryption - review for data exfiltration purposes',
+                'technique': 'Asymmetric encryption'
+            },
+            {
+                'name': 'AES-GCM Encryption',
+                'pattern': r'AES-GCM',
+                'severity': 'medium',
+                'description': 'Uses AES-GCM authenticated encryption - may hide exfiltrated data from network inspection',
+                'technique': 'Symmetric encryption'
+            },
+            {
+                'name': 'Crypto Subtle Encrypt',
+                'pattern': r'crypto\.subtle\.encrypt\s*\(',
+                'severity': 'medium',
+                'description': 'Uses Web Crypto API for encryption - review context for data exfiltration',
+                'technique': 'Data encryption'
+            },
+            {
+                'name': 'Encrypted Blob with IV',
+                'pattern': r'["\'](iv|IV|wrappedKey|encData|encImg|encMeta)["\']',
+                'severity': 'high',
+                'description': 'Uses encrypted blob field names with IV - suggests encrypted data exfiltration',
+                'technique': 'Encrypted exfiltration'
+            },
+            # FormData Exfiltration Patterns
+            {
+                'name': 'FormData with Binary Blob',
+                'pattern': r'new\s+FormData\s*\(\s*\)[\s\S]{0,500}\.append\s*\([^)]*new\s+Blob',
+                'severity': 'high',
+                'description': 'Creates FormData with binary blob - may be uploading captured data',
+                'technique': 'Binary data exfiltration'
+            },
+            {
+                'name': 'Bulk Data Collection via FormData',
+                'pattern': r'formData\.append[\s\S]{0,100}formData\.append[\s\S]{0,100}formData\.append',
+                'severity': 'medium',
+                'description': 'Multiple FormData appends - may be collecting extensive user data',
+                'technique': 'Data collection'
+            },
+            # ========== KEYLOGGER & INPUT CAPTURE ==========
+            {
+                'name': 'Input Field Event Listener',
+                'pattern': r'addEventListener\s*\(\s*["\'](input|change)["\']',
+                'severity': 'medium',
+                'description': 'Monitors input field changes - review if targeting sensitive fields',
+                'technique': 'Input monitoring'
+            },
+            {
+                'name': 'Password Field Targeting',
+                'pattern': r'input\[type=["\']?password["\']?\]|querySelectorAll?\s*\([^)]*password',
+                'severity': 'critical',
+                'description': 'Targets password input fields - HIGH RISK of credential theft',
+                'technique': 'Credential theft'
+            },
+            {
+                'name': 'Credit Card Field Targeting',
+                'pattern': r'cardnumber|card-number|cc-number|cvv|cvc|creditcard|card_number|cc_num|ccv|credit.?card',
+                'severity': 'critical',
+                'description': 'Targets payment card fields - HIGH RISK of financial data theft',
+                'technique': 'Financial data theft'
+            },
+            {
+                'name': 'Card Expiry Field Targeting',
+                'pattern': r'expiry.?date|exp.?month|exp.?year|card.?expir|cc.?exp',
+                'severity': 'critical',
+                'description': 'Targets card expiration fields - financial data theft indicator',
+                'technique': 'Financial data theft'
+            },
+            {
+                'name': 'Form Data Harvesting',
+                'pattern': r'querySelectorAll\s*\(\s*["\']input|getElementsByTagName\s*\(\s*["\']input',
+                'severity': 'medium',
+                'description': 'Queries all input fields on page - may be harvesting form data',
+                'technique': 'Form data collection'
+            },
+            {
+                'name': 'Keystroke Buffer Array',
+                'pattern': r'(let|var|const)\s+\w*(log|key|buffer|stroke|char)\w*\s*=\s*\[\s*\]',
+                'severity': 'high',
+                'description': 'Creates array for buffering keystrokes - KEYLOGGER INDICATOR',
+                'technique': 'Keystroke logging'
+            },
+            {
+                'name': 'Key Event Data Push',
+                'pattern': r'\.(push|concat)\s*\([^)]*\.key\b|\.(push|concat)\s*\([^)]*keyCode',
+                'severity': 'high',
+                'description': 'Pushes key event data to array - KEYLOGGER BEHAVIOR',
+                'technique': 'Keystroke logging'
+            },
+            {
+                'name': 'Clipboard Read Access',
+                'pattern': r'navigator\.clipboard\.read|document\.execCommand\s*\(\s*["\']paste',
+                'severity': 'high',
+                'description': 'Reads clipboard contents - can steal copied passwords/sensitive data',
+                'technique': 'Clipboard theft'
+            },
+            # ========== CSS-BASED KEYLOGGING ==========
+            {
+                'name': 'CSS Attribute Selector Injection',
+                'pattern': r'input\[value\$=|input\[value\^=|input\[value\*=',
+                'severity': 'critical',
+                'description': 'CSS attribute selector on input value - CSS KEYLOGGING TECHNIQUE',
+                'technique': 'CSS keylogging'
+            },
+            {
+                'name': 'CSS Background URL Exfiltration',
+                'pattern': r'background(-image)?\s*:\s*url\s*\([^)]*\?.*?(key|char|val|input)',
+                'severity': 'critical',
+                'description': 'CSS background URL with parameters - CSS KEYLOGGING via server requests',
+                'technique': 'CSS keylogging'
+            },
+            # ========== SCREEN CAPTURE (Additional) ==========
+            {
+                'name': 'Canvas toBlob Export',
+                'pattern': r'\.toBlob\s*\(',
+                'severity': 'medium',
+                'description': 'Converts canvas to blob - commonly used for screenshot exfiltration',
+                'technique': 'Image export'
+            },
+            {
+                'name': 'Offscreen Document Creation (MV3)',
+                'pattern': r'chrome\.offscreen\.createDocument|offscreen.*reason.*CLIPBOARD|offscreen.*reason.*DOM_SCRAPING',
+                'severity': 'high',
+                'description': 'Creates offscreen document - MV3 technique to run invisible capture scripts',
+                'technique': 'Offscreen execution'
+            },
+            {
+                'name': 'getDisplayMedia Screen Recording',
+                'pattern': r'getDisplayMedia|getUserMedia.*video',
+                'severity': 'critical',
+                'description': 'Requests screen/camera access - can record user activity',
+                'technique': 'Screen recording'
+            },
+            # ========== EXFILTRATION SINKS ==========
+            {
+                'name': 'Beacon Data Exfiltration',
+                'pattern': r'navigator\.sendBeacon\s*\(',
+                'severity': 'high',
+                'description': 'Uses sendBeacon API - sends data even when page closes (stealthy exfiltration)',
+                'technique': 'Beacon exfiltration'
+            },
+            {
+                'name': 'WebSocket Connection',
+                'pattern': r'new\s+WebSocket\s*\(',
+                'severity': 'medium',
+                'description': 'Opens WebSocket connection - review for C2 or real-time data exfiltration',
+                'technique': 'WebSocket communication'
+            },
+            {
+                'name': 'WebSocket Data Send',
+                'pattern': r'\.send\s*\([^)]*JSON\.stringify|ws\.send\s*\(',
+                'severity': 'high',
+                'description': 'Sends data via WebSocket - possible real-time exfiltration',
+                'technique': 'WebSocket exfiltration'
+            },
+            {
+                'name': 'Obfuscated URL Assembly',
+                'pattern': r'\[[\s\S]*?["\'](ht|htt|http|ws)["\'][\s\S]*?\]\.join\s*\(\s*["\']["\']?\s*\)',
+                'severity': 'critical',
+                'description': 'Assembles URL from array fragments - EVASION TECHNIQUE to hide C2 domains',
+                'technique': 'URL obfuscation'
+            },
+            {
+                'name': 'Hex Encoded String',
+                'pattern': r'\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}\\x[0-9a-fA-F]{2}',
+                'severity': 'high',
+                'description': 'Contains hex-encoded strings - may hide malicious URLs or code',
+                'technique': 'String obfuscation'
+            },
+            {
+                'name': 'Chrome Alarms Heartbeat',
+                'pattern': r'chrome\.alarms\.create|chrome\.alarms\.onAlarm',
+                'severity': 'medium',
+                'description': 'Creates scheduled alarms - may be used for periodic C2 check-ins',
+                'technique': 'Scheduled execution'
+            },
+            {
+                'name': 'Periodic Data Beacon (setInterval)',
+                'pattern': r'setInterval\s*\([^)]*fetch|setInterval\s*\([^)]*XMLHttpRequest|setInterval\s*\([^)]*sendBeacon',
+                'severity': 'high',
+                'description': 'Periodically sends data - HEARTBEAT PATTERN for C2 communication',
+                'technique': 'Periodic exfiltration'
+            },
+            # ========== EVASION & ANTI-ANALYSIS ==========
+            {
+                'name': 'setTimeout String Execution',
+                'pattern': r'setTimeout\s*\(\s*["\'][^"\']+["\']',
+                'severity': 'high',
+                'description': 'Executes string via setTimeout - code injection technique',
+                'technique': 'Delayed code execution'
+            },
+            {
+                'name': 'Remote Script Injection (createElement)',
+                'pattern': r'createElement\s*\(\s*["\']script["\'][\s\S]{0,200}\.src\s*=',
+                'severity': 'high',
+                'description': 'Creates script element with external source - REMOTE CODE LOADING',
+                'technique': 'Remote script injection'
+            },
+            {
+                'name': 'DevTools Detection',
+                'pattern': r'devtools|__REACT_DEVTOOLS__|window\.outerWidth\s*-\s*window\.innerWidth|debugger',
+                'severity': 'high',
+                'description': 'Detects developer tools - ANTI-ANALYSIS technique to hide malicious behavior',
+                'technique': 'Anti-debugging'
+            },
+            {
+                'name': 'JavaScript Obfuscator Signature',
+                'pattern': r'_0x[0-9a-f]{4,}|var\s+_0x[0-9a-f]+\s*=\s*\[',
+                'severity': 'high',
+                'description': 'Contains obfuscator signatures (_0x pattern) - code intentionally hidden',
+                'technique': 'Code obfuscation'
+            },
+            {
+                'name': 'Large String Array (Obfuscation)',
+                'pattern': r'var\s+\w+\s*=\s*\[\s*["\'][^"\']{50,}',
+                'severity': 'medium',
+                'description': 'Contains large encoded string arrays - possible obfuscated code',
+                'technique': 'String array obfuscation'
+            },
+            {
+                'name': 'CharCode Decoding',
+                'pattern': r'String\.fromCharCode\s*\(\s*[\d,\s]+\)',
+                'severity': 'medium',
+                'description': 'Decodes strings from char codes - may hide malicious strings',
+                'technique': 'String obfuscation'
+            },
+            {
+                'name': 'Prototype Pollution Setup',
+                'pattern': r'__proto__|Object\.prototype\.\w+\s*=',
+                'severity': 'high',
+                'description': 'Modifies object prototypes - can lead to code injection',
+                'technique': 'Prototype pollution'
+            },
+            # ========== HIGH-RISK API COMBINATIONS ==========
+            {
+                'name': 'WebRequest Blocking',
+                'pattern': r'chrome\.webRequest\.onBeforeRequest|webRequestBlocking',
+                'severity': 'high',
+                'description': 'Intercepts/blocks web requests - can modify or steal request data',
+                'technique': 'Request interception'
+            },
+            {
+                'name': 'Cookie Store Access',
+                'pattern': r'chrome\.cookies\.getAll|chrome\.cookies\.get\s*\(',
+                'severity': 'high',
+                'description': 'Reads browser cookies - can steal session tokens',
+                'technique': 'Cookie theft'
+            },
+            {
+                'name': 'History Access',
+                'pattern': r'chrome\.history\.search|chrome\.history\.getVisits',
+                'severity': 'medium',
+                'description': 'Reads browsing history - privacy violation',
+                'technique': 'History theft'
+            },
+            {
+                'name': 'Bookmark Access',
+                'pattern': r'chrome\.bookmarks\.getTree|chrome\.bookmarks\.search',
+                'severity': 'low',
+                'description': 'Reads bookmarks - may be collecting user interests',
+                'technique': 'Bookmark collection'
+            },
+            {
+                'name': 'Downloads Manipulation',
+                'pattern': r'chrome\.downloads\.download\s*\(|chrome\.downloads\.open',
+                'severity': 'medium',
+                'description': 'Initiates downloads - may download malware or exfiltrate data',
+                'technique': 'Download manipulation'
+            },
         ]
-    
+
+    def _resolve_localized_string(self, extension_dir, msg_key, default):
+        """
+        Resolve localized string from _locales directory
+        Args:
+            extension_dir: Path to extension directory
+            msg_key: The message key (without __MSG_ prefix and __ suffix)
+            default: Default value if resolution fails
+        Returns:
+            Resolved string or default
+        """
+        locales_dir = extension_dir / '_locales'
+        if not locales_dir.exists():
+            return default
+
+        # Try common locales in order of preference
+        locale_priorities = ['en', 'en_US', 'en_GB', 'de', 'fr', 'es', 'pt', 'zh', 'ja', 'ko']
+
+        # First try prioritized locales
+        for locale in locale_priorities:
+            messages_path = locales_dir / locale / 'messages.json'
+            if messages_path.exists():
+                try:
+                    with open(messages_path, 'r', encoding='utf-8') as f:
+                        messages = json.load(f)
+                        if msg_key in messages:
+                            return messages[msg_key].get('message', default)
+                except Exception:
+                    continue
+
+        # If not found, try any locale
+        try:
+            for locale_folder in locales_dir.iterdir():
+                if locale_folder.is_dir():
+                    messages_path = locale_folder / 'messages.json'
+                    if messages_path.exists():
+                        try:
+                            with open(messages_path, 'r', encoding='utf-8') as f:
+                                messages = json.load(f)
+                                if msg_key in messages:
+                                    return messages[msg_key].get('message', default)
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+        return default
+
     def analyze_extension(self, extension_dir):
         """
         Perform complete static analysis on an extension
@@ -197,17 +635,57 @@ class EnhancedStaticAnalyzer:
         
         with open(manifest_path, 'r', encoding='utf-8') as f:
             manifest = json.load(f)
-        
+
         extension_name = manifest.get('name', 'Unknown')
+        extension_desc = manifest.get('description', '')
+
+        # Resolve localized strings (e.g., __MSG_appName__)
+        if extension_name.startswith('__MSG_') and extension_name.endswith('__'):
+            msg_key = extension_name[6:-2]  # Extract key from __MSG_key__
+            extension_name = self._resolve_localized_string(extension_dir, msg_key, extension_name)
+
+        # Resolve localized description
+        if extension_desc.startswith('__MSG_') and extension_desc.endswith('__'):
+            msg_key = extension_desc[6:-2]
+            extension_desc = self._resolve_localized_string(extension_dir, msg_key, extension_desc)
+
         print(f"[+] Extension: {extension_name}")
         print(f"[+] Version: {manifest.get('version', 'Unknown')}")
         
+        # Extract extension icon (largest available)
+        icon_base64 = None
+        icons = manifest.get('icons', {})
+        if icons:
+            # Get largest icon (prefer 128, then 64, then 48, then 32, then 16)
+            for size in ['128', '96', '64', '48', '32', '16']:
+                if size in icons:
+                    icon_path = extension_dir / icons[size]
+                    if icon_path.exists():
+                        try:
+                            import base64
+                            with open(icon_path, 'rb') as icon_file:
+                                icon_data = icon_file.read()
+                                icon_base64 = base64.b64encode(icon_data).decode('utf-8')
+                                # Determine mime type
+                                if str(icon_path).lower().endswith('.png'):
+                                    icon_base64 = f"data:image/png;base64,{icon_base64}"
+                                elif str(icon_path).lower().endswith('.jpg') or str(icon_path).lower().endswith('.jpeg'):
+                                    icon_base64 = f"data:image/jpeg;base64,{icon_base64}"
+                                else:
+                                    icon_base64 = f"data:image/png;base64,{icon_base64}"
+                                print(f"[+] Icon extracted: {icons[size]}")
+                                break
+                        except Exception as e:
+                            print(f"[!] Failed to extract icon: {e}")
+
         # Initialize results
         results = {
             'extension_id': extension_dir.name,
             'name': extension_name,
             'version': manifest.get('version'),
             'manifest_version': manifest.get('manifest_version'),
+            'description': extension_desc,
+            'icon_base64': icon_base64,
             'permissions': {},
             'malicious_patterns': [],
             'external_scripts': [],
@@ -215,7 +693,7 @@ class EnhancedStaticAnalyzer:
             'settings_overrides': {},
             'campaign_attribution': None,
             'domain_analysis': [],
-            'virustotal_results': [],  # NEW
+            'virustotal_results': [],
             'ast_results': {},
             'risk_score': 0,
             'risk_level': 'UNKNOWN'
@@ -241,7 +719,7 @@ class EnhancedStaticAnalyzer:
                 'severity': 'high',
                 'description': f"Sends data to {exfil['destination']}",
                 'technique': 'Data Exfiltration',
-                'file': exfil.get('file', 'Unknown'),  # Fixed: use actual filename from AST
+                'file': exfil.get('file', 'Unknown'),
                 'line': exfil.get('line', 0),
                 'context': exfil.get('evidence', ''),
                 'evidence': exfil.get('evidence', ''),  # Add evidence field for code snippet
@@ -306,7 +784,7 @@ class EnhancedStaticAnalyzer:
             'medium_risk': [],
             'low_risk': [],
             'all': all_permissions,
-            'details': {}  # NEW: Detailed info for each permission
+            'details': {}
         }
         
         for perm in all_permissions:
@@ -348,7 +826,103 @@ class EnhancedStaticAnalyzer:
                 print(f"  [!]  MEDIUM: {perm}")
             else:
                 permission_analysis['low_risk'].append(perm)
-        
+
+        # ========== PERMISSION COMBINATION WARNINGS ==========
+        # Check for dangerous permission combinations that indicate malicious intent
+        permission_set = set(p.lower() if isinstance(p, str) else '' for p in all_permissions)
+        permission_analysis['combination_warnings'] = []
+
+        # tabs + storage = URL harvesting pattern
+        if 'tabs' in permission_set and 'storage' in permission_set:
+            permission_analysis['combination_warnings'].append({
+                'name': 'URL Harvesting Pattern',
+                'permissions': ['tabs', 'storage'],
+                'severity': 'HIGH',
+                'description': 'Can harvest visited URLs via tabs API and store them for later exfiltration'
+            })
+            print("  [FLAG] COMBO WARNING: tabs + storage (URL harvesting pattern)")
+
+        # tabs + <all_urls> = Screen capture capability
+        has_all_urls = any(p in ['<all_urls>', '*://*/*', 'http://*/*', 'https://*/*'] for p in all_permissions)
+        if 'tabs' in permission_set and has_all_urls:
+            permission_analysis['combination_warnings'].append({
+                'name': 'Screen Capture Capability',
+                'permissions': ['tabs', '<all_urls>'],
+                'severity': 'CRITICAL',
+                'description': 'Can capture screenshots of any website via captureVisibleTab API'
+            })
+            print("  [FLAG] COMBO WARNING: tabs + <all_urls> (screen capture capable)")
+
+        # webRequest + <all_urls> = Traffic interception
+        if ('webrequest' in permission_set or 'webrequestblocking' in permission_set) and has_all_urls:
+            permission_analysis['combination_warnings'].append({
+                'name': 'Traffic Interception',
+                'permissions': ['webRequest', '<all_urls>'],
+                'severity': 'CRITICAL',
+                'description': 'Can intercept, modify, or block ALL web traffic including credentials'
+            })
+            print("  [FLAG] COMBO WARNING: webRequest + <all_urls> (traffic interception)")
+
+        # scripting + <all_urls> = Universal code injection
+        if 'scripting' in permission_set and has_all_urls:
+            permission_analysis['combination_warnings'].append({
+                'name': 'Universal Code Injection',
+                'permissions': ['scripting', '<all_urls>'],
+                'severity': 'CRITICAL',
+                'description': 'Can inject JavaScript into ANY webpage - severe data theft risk'
+            })
+            print("  [FLAG] COMBO WARNING: scripting + <all_urls> (universal code injection)")
+
+        # clipboardRead + storage = Clipboard theft pattern
+        if 'clipboardread' in permission_set and 'storage' in permission_set:
+            permission_analysis['combination_warnings'].append({
+                'name': 'Clipboard Theft Pattern',
+                'permissions': ['clipboardRead', 'storage'],
+                'severity': 'HIGH',
+                'description': 'Can steal clipboard contents (passwords, crypto addresses) and store for exfiltration'
+            })
+            print("  [FLAG] COMBO WARNING: clipboardRead + storage (clipboard theft pattern)")
+
+        # history + storage = Browsing history theft
+        if 'history' in permission_set and 'storage' in permission_set:
+            permission_analysis['combination_warnings'].append({
+                'name': 'Browsing History Theft',
+                'permissions': ['history', 'storage'],
+                'severity': 'HIGH',
+                'description': 'Can steal complete browsing history and store for exfiltration'
+            })
+            print("  [FLAG] COMBO WARNING: history + storage (browsing history theft)")
+
+        # cookies + <all_urls> = Session hijacking
+        if 'cookies' in permission_set and has_all_urls:
+            permission_analysis['combination_warnings'].append({
+                'name': 'Session Hijacking Capability',
+                'permissions': ['cookies', '<all_urls>'],
+                'severity': 'CRITICAL',
+                'description': 'Can steal session cookies from ANY website - account takeover risk'
+            })
+            print("  [FLAG] COMBO WARNING: cookies + <all_urls> (session hijacking capable)")
+
+        # management = Can disable other extensions (including security extensions)
+        if 'management' in permission_set:
+            permission_analysis['combination_warnings'].append({
+                'name': 'Extension Control',
+                'permissions': ['management'],
+                'severity': 'HIGH',
+                'description': 'Can disable other extensions including security/privacy tools'
+            })
+            print("  [FLAG] COMBO WARNING: management (can disable security extensions)")
+
+        # proxy = Can route all traffic through attacker server
+        if 'proxy' in permission_set:
+            permission_analysis['combination_warnings'].append({
+                'name': 'Traffic Routing Control',
+                'permissions': ['proxy'],
+                'severity': 'HIGH',
+                'description': 'Can route ALL browser traffic through attacker-controlled proxy server'
+            })
+            print("  [FLAG] COMBO WARNING: proxy (traffic routing control)")
+
         return permission_analysis
     
     def analyze_settings_overrides(self, manifest):
@@ -426,19 +1000,34 @@ class EnhancedStaticAnalyzer:
         return found_params
     
     def scan_code(self, code, file_path):
-        """Scan code for malicious patterns"""
+        """Scan code for malicious patterns with extended context for code snippets"""
         found_patterns = []
-        
+        lines = code.split('\n')
+
         for pattern_def in self.malicious_patterns:
             matches = re.finditer(pattern_def['pattern'], code, re.IGNORECASE)
-            
+
             for match in matches:
                 line_num = code[:match.start()].count('\n') + 1
-                lines = code.split('\n')
-                context_start = max(0, line_num - 2)
-                context_end = min(len(lines), line_num + 1)
-                context = '\n'.join(lines[context_start:context_end])
-                
+
+                # Get 3 lines before and 3 lines after (7 lines total context)
+                context_start = max(0, line_num - 4)  # 3 lines before (0-indexed adjustment)
+                context_end = min(len(lines), line_num + 3)  # 3 lines after
+
+                # Build context with line numbers for display
+                context_lines = []
+                for i in range(context_start, context_end):
+                    line_indicator = '>>>' if i == line_num - 1 else '   '
+                    context_lines.append(f"{line_indicator} {i + 1:4d} | {lines[i]}")
+
+                context_with_numbers = '\n'.join(context_lines)
+
+                # Also keep raw context for other uses
+                raw_context = '\n'.join(lines[context_start:context_end])
+
+                # Get the matched text itself
+                matched_text = match.group(0)[:100]  # Limit match preview
+
                 found_patterns.append({
                     'name': pattern_def['name'],
                     'severity': pattern_def['severity'],
@@ -446,9 +1035,13 @@ class EnhancedStaticAnalyzer:
                     'technique': pattern_def.get('technique', 'Unknown'),
                     'file': file_path,
                     'line': line_num,
-                    'context': context[:200]
+                    'context': raw_context[:500],
+                    'context_with_lines': context_with_numbers,
+                    'matched_text': matched_text,
+                    'context_start_line': context_start + 1,
+                    'context_end_line': context_end
                 })
-        
+
         return found_patterns
     
     def find_external_scripts(self, code, file_path):

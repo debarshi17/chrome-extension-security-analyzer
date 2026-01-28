@@ -16,6 +16,11 @@ from virustotal_checker import VirusTotalChecker
 from pii_classifier import PIIClassifier
 from ioc_manager import IOCManager
 from advanced_detection import AdvancedDetector
+from cuckoo_sandbox import CuckooSandbox
+from store_metadata import StoreMetadata
+from threat_attribution import ThreatAttribution
+from false_positive_filter import FalsePositiveFilter
+from host_permissions_analyzer import HostPermissionsAnalyzer
 
 class ChromeExtensionAnalyzer:
     """Main analyzer orchestrator with professional-grade analysis"""
@@ -30,6 +35,11 @@ class ChromeExtensionAnalyzer:
         self.pii_classifier = PIIClassifier()
         self.ioc_manager = IOCManager()
         self.advanced_detector = AdvancedDetector()
+        self.cuckoo = CuckooSandbox()
+        self.store_metadata = StoreMetadata()
+        self.threat_attribution = ThreatAttribution()
+        self.false_positive_filter = FalsePositiveFilter()
+        self.host_permissions_analyzer = HostPermissionsAnalyzer()
     
     def analyze_extension(self, extension_id):
         """
@@ -46,7 +56,34 @@ class ChromeExtensionAnalyzer:
         print("    Professional Threat Intelligence Edition with VirusTotal")
         print("=" * 80)
         print(f"\n[+] Target Extension ID: {extension_id}\n")
-        
+
+        # Step 0: Fetch Chrome Web Store Metadata
+        print("[STORE] STEP 0: Fetching Chrome Web Store metadata...")
+        print("-" * 80)
+        store_metadata = self.store_metadata.fetch_metadata(extension_id)
+
+        if store_metadata.get('available'):
+            print(f"[+] Extension: {store_metadata.get('name', 'Unknown')}")
+            print(f"    Author: {store_metadata.get('author', 'Unknown')} {'(verified)' if store_metadata.get('author_verified') else '(unverified)'}")
+            print(f"    Users: {store_metadata.get('user_count_text', 'Unknown')}")
+            print(f"    Rating: {store_metadata.get('rating', 'N/A')}")
+            print(f"    Last Updated: {store_metadata.get('last_updated_text', 'Unknown')}")
+
+            # Check for Chrome warnings (policy violations)
+            if store_metadata.get('has_chrome_warning'):
+                print(f"\n[!] CHROME POLICY WARNING: {store_metadata.get('chrome_warning')}")
+                print(f"    Note: This is a policy violation, not necessarily malware")
+
+            # Check risk signals
+            risk_signals = store_metadata.get('risk_signals', {})
+            if risk_signals.get('low_adoption'):
+                print(f"[i] Low adoption: <100 users (increased risk)")
+            if risk_signals.get('no_privacy_policy'):
+                print(f"[i] No privacy policy found")
+        else:
+            print(f"[!] Could not fetch store metadata: {store_metadata.get('error', 'Unknown error')}")
+            print(f"    Continuing with analysis...")
+
         # Step 1: Download
         print("[DOWNLOAD] STEP 1: Downloading extension...")
         print("-" * 80)
@@ -67,19 +104,44 @@ class ChromeExtensionAnalyzer:
         
         # Read manifest
         manifest = self.unpacker.read_manifest(extension_dir)
-        
+
         if not manifest:
             print("\n[[X]] Failed to read manifest.json")
             return None
-        
+
+        # Step 2.5: Host Permissions Analysis
+        print("\n[PERMISSIONS] STEP 2.5: Analyzing host permissions...")
+        print("-" * 80)
+        manifest_path = extension_dir / 'manifest.json'
+        host_permissions = self.host_permissions_analyzer.analyze_manifest(manifest_path)
+
+        print(f"[+] Permission Scope: {host_permissions['permission_scope']}")
+        print(f"[+] Risk Assessment: {host_permissions['risk_assessment']['overall_risk']}")
+
+        stats = host_permissions['statistics']
+        print(f"    • Host Permissions: {stats['total_host_permissions']}")
+        print(f"    • Content Scripts: {stats['total_content_scripts']}")
+
+        if host_permissions['all_urls_access']:
+            print(f"[!] CRITICAL: Extension has <all_urls> access - can read/modify ALL websites!")
+
+        if host_permissions['sensitive_access']:
+            print(f"[!] Accesses {stats['total_sensitive_domains']} sensitive domain(s) across {stats['total_sensitive_categories']} categories")
+            for category, domains in list(host_permissions['sensitive_access'].items())[:2]:
+                print(f"    • {category.replace('_', ' ').title()}: {len(domains)} domain(s)")
+
         # Step 3: Static Analysis
         print("\n[SCAN] STEP 3: Performing static analysis...")
         print("-" * 80)
         results = self.analyzer.analyze_extension(extension_dir)
-        
+
         if not results:
             print("\n[[X]] Analysis failed.")
             return None
+
+        # Add store metadata and host permissions to results
+        results['store_metadata'] = store_metadata
+        results['host_permissions'] = host_permissions
         
         # Step 4: Domain Intelligence Analysis
         print("\n[DOMAIN] STEP 4: Domain intelligence analysis...")
@@ -108,10 +170,36 @@ class ChromeExtensionAnalyzer:
 
         print(f"\n[+] Updated Risk Score (with VirusTotal): {results['risk_score']:.1f}/10 ({results['risk_level']})")
 
-        # Step 6: Advanced Malware Detection
+        # Step 5.5: Dynamic Analysis with Cuckoo Sandbox
+        print("\n[CUCKOO] STEP 5.5: Dynamic analysis (Cuckoo Sandbox)...")
+        print("-" * 80)
+        dynamic_evidence = self._run_cuckoo_analysis(extension_dir, extension_id)
+
+        if dynamic_evidence and dynamic_evidence.get('available'):
+            print(f"[+] Dynamic analysis complete: {dynamic_evidence.get('verdict', 'Unknown')}")
+            print(f"    Risk Score: {dynamic_evidence.get('dynamic_risk_score', 0)}/10")
+
+            if dynamic_evidence.get('malicious_indicators'):
+                print(f"[!] {len(dynamic_evidence['malicious_indicators'])} malicious behavior(s) detected:")
+                for indicator in dynamic_evidence['malicious_indicators'][:3]:
+                    print(f"    • {indicator.get('description', 'Unknown')}")
+
+            # Update risk score based on dynamic analysis
+            dynamic_risk = dynamic_evidence.get('dynamic_risk_score', 0)
+            if dynamic_risk >= 8:
+                results['risk_score'] = min(10.0, results['risk_score'] + 2.5)
+            elif dynamic_risk >= 5:
+                results['risk_score'] = min(10.0, results['risk_score'] + 1.5)
+
+            results['dynamic_analysis'] = dynamic_evidence
+        else:
+            print("[i] Cuckoo Sandbox not available or disabled")
+            dynamic_evidence = None
+
+        # Step 6: Advanced Malware Detection (with dynamic evidence)
         print("\n[ADVANCED] STEP 6: Advanced malware detection...")
         print("-" * 80)
-        advanced_findings = self.advanced_detector.run_all_detections(extension_dir)
+        advanced_findings = self.advanced_detector.run_all_detections(extension_dir, dynamic_evidence=dynamic_evidence)
         results['advanced_detection'] = advanced_findings
 
         # Update risk score based on advanced detection
@@ -142,6 +230,47 @@ class ChromeExtensionAnalyzer:
         print("\n[IOC] STEP 8: Updating IOC database...")
         print("-" * 80)
         self._update_ioc_database(results, vt_results, extension_id)
+
+        # Step 8.5: Threat Attribution
+        print("\n[ATTRIBUTION] STEP 8.5: Threat campaign attribution...")
+        print("-" * 80)
+        attribution = self._check_threat_attribution(extension_id, results.get('name', 'Unknown'))
+
+        if attribution:
+            results['threat_attribution'] = attribution
+
+            # Elevate risk score based on attribution findings
+            confidence = attribution.get('confidence', 'NONE')
+            attribution_found = attribution.get('attribution_found', False)
+
+            if confidence == 'CONFIRMED':
+                # Database match - CRITICAL
+                print(f"[!] CRITICAL: Extension found in known malicious database!")
+                print(f"    Campaign: {attribution.get('campaign_name', 'Unknown')}")
+                print(f"    Threat Actor: {attribution.get('threat_actor', 'Unknown')}")
+                results['risk_score'] = min(10.0, results['risk_score'] + 4.0)
+                results['risk_level'] = 'CRITICAL'
+            elif confidence == 'HIGH' and attribution_found:
+                # Campaign detected via web search
+                print(f"[!] HIGH: Campaign detected via OSINT web search!")
+                print(f"    Campaign: {attribution.get('campaign_name', 'Unknown')}")
+                results['risk_score'] = min(10.0, results['risk_score'] + 3.0)
+                if results['risk_level'] not in ['CRITICAL']:
+                    results['risk_level'] = 'HIGH'
+            elif confidence == 'MEDIUM' and attribution_found:
+                # Malicious indicators found via web search
+                print(f"[!] MEDIUM: Malicious indicators found in web search results")
+                results['risk_score'] = min(10.0, results['risk_score'] + 2.0)
+                if results['risk_level'] not in ['CRITICAL', 'HIGH']:
+                    results['risk_level'] = 'HIGH'
+            elif confidence == 'LOW':
+                # Mentions found but no clear malicious indicators
+                print(f"[i] LOW: Extension mentioned in web searches (no clear malicious indicators)")
+            else:
+                print(f"[i] No threat attribution found - checking search queries...")
+                if attribution.get('search_queries'):
+                    first_query = attribution['search_queries'][0]
+                    print(f"    Search: {first_query['search_url']}")
 
         # Step 9: Generate Reports
         print("\n[REPORT] STEP 9: Generating professional reports...")
@@ -228,7 +357,19 @@ class ChromeExtensionAnalyzer:
             list(unique_domains),
             max_checks=10  # Limit to 10 to avoid rate limits
         )
-        
+
+        # Apply false positive filtering
+        filtered = self.false_positive_filter.filter_virustotal_results(vt_results)
+        vt_results = filtered['filtered_results']
+
+        # Print suppression info
+        if filtered['suppression_count'] > 0:
+            print(f"[i] Suppressed {filtered['suppression_count']} known benign domain(s):")
+            for suppressed in filtered['suppressed_false_positives'][:3]:
+                print(f"    • {suppressed['domain']} - {suppressed['reason']}")
+            if filtered['suppression_count'] > 3:
+                print(f"    ... and {filtered['suppression_count'] - 3} more")
+
         # Print summary of malicious findings
         malicious = [r for r in vt_results if r.get('threat_level') == 'MALICIOUS']
         suspicious = [r for r in vt_results if r.get('threat_level') == 'SUSPICIOUS']
@@ -489,6 +630,27 @@ class ChromeExtensionAnalyzer:
         stats = self.ioc_manager.get_statistics()
         print(f"[IOC] Database now contains {stats['total_domains']} domains, {stats['total_extensions']} extensions")
 
+    def _run_cuckoo_analysis(self, extension_dir, extension_id):
+        """Run dynamic analysis with Cuckoo Sandbox"""
+        try:
+            # Submit extension to Cuckoo for analysis
+            result = self.cuckoo.submit_extension(extension_dir, extension_id, timeout=300)
+            return result
+        except Exception as e:
+            # Cuckoo might not be available - that's OK
+            print(f"[i] Cuckoo analysis skipped: {str(e)}")
+            return None
+
+    def _check_threat_attribution(self, extension_id, extension_name):
+        """Check if extension mentioned in known threat campaigns"""
+        try:
+            # Extract domains from results for campaign matching
+            attribution = self.threat_attribution.search_threat_campaigns(extension_id, extension_name)
+            return attribution
+        except Exception as e:
+            print(f"[!] Threat attribution failed: {str(e)}")
+            return None
+
 
 def main():
     """CLI entry point"""
@@ -505,12 +667,19 @@ Examples:
   python src/analyzer.py eebihieclccoidddmjcencomodomdoei
   
 Features:
+  [OK] Chrome Web Store metadata collection
+  [OK] Cuckoo Sandbox dynamic analysis
+  [OK] False positive suppression (Firebase, jQuery, CDNs)
+  [OK] Threat campaign attribution via web search
   [OK] VirusTotal domain reputation checking
-  [OK] Campaign attribution (DarkSpectre, ZoomStealer, etc.)
+  [OK] Campaign attribution (DarkSpectre, ZoomStealer, SpyVPN, etc.)
   [OK] Domain intelligence (C2, DGA, typosquatting detection)
   [OK] Professional threat intelligence reports
-  [OK] Detailed permission analysis
-  [OK] Deep code pattern detection
+  [OK] PII/data classification analysis
+  [OK] Advanced malware detection (CSP manipulation, DOM injection, etc.)
+  [OK] IOC database management
+  [OK] Permission combination risk analysis
+  [OK] 64+ malicious code pattern detection
         """
     )
     

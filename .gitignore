@@ -11,6 +11,13 @@ reports/
 # Dynamic IOC database
 iocs.json
 
+# Attribution cache
+data/attribution_cache.json
+
+# Windows device files
+nul
+NUL
+
 # Editor/tool local files
 .claude/
 # Byte-compiled / optimized / DLL files

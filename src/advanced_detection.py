@@ -272,58 +272,101 @@ class AdvancedDetector:
 
         return findings
 
-    def detect_delayed_activation(self, extension_path):
+    def detect_delayed_activation(self, extension_path, dynamic_evidence=None):
         """
         Detect time-bomb/delayed activation patterns
 
+        CRITICAL: This finding requires BOTH static AND dynamic evidence.
+        Static patterns alone are insufficient for a time bomb verdict.
+
         Args:
             extension_path: Path to unpacked extension
+            dynamic_evidence: Optional dynamic analysis results from Cuckoo
 
         Returns:
-            list: List of delayed activation findings
+            list: List of delayed activation findings (only if BOTH evidences present)
         """
         findings = []
         extension_path = Path(extension_path)
 
-        # Patterns for delayed activation
+        # CRITICAL: Extract delay duration, not just pattern presence
+        # Many extensions legitimately use setTimeout for UI/performance
         delay_patterns = [
-            (r'setTimeout.*\d{5,}', 'Long setTimeout delay (>10 seconds)'),
-            (r'setInterval.*\d{4,}', 'Periodic interval check'),
-            (r'Date\.now\(\).*[><]=.*\d{10,}', 'Timestamp comparison for activation'),
+            (r'setTimeout.*?(\d{5,})', 'Long setTimeout delay (>10 seconds)'),
+            (r'setInterval.*?(\d{4,})', 'Periodic interval check'),
+            (r'Date\.now\(\).*[><]=.*(\d{10,})', 'Timestamp comparison for activation'),
             (r'cookie.*install.*time', 'Cookie-based install time tracking'),
             (r'chrome\.storage\..*get.*install.*date', 'Storage-based activation timer')
         ]
 
         js_files = list(extension_path.glob('**/*.js'))
+        static_indicators = []
 
         for js_file in js_files:
             try:
                 with open(js_file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
 
-                matches = []
                 for pattern, description in delay_patterns:
-                    if re.search(pattern, content, re.IGNORECASE):
-                        matches.append(description)
+                    matches = re.findall(pattern, content, re.IGNORECASE)
+                    for match in matches:
+                        # Extract delay value if numeric
+                        delay_ms = None
+                        if isinstance(match, str) and match.isdigit():
+                            delay_ms = int(match)
+                        elif isinstance(match, tuple) and match[0].isdigit():
+                            delay_ms = int(match[0])
 
-                if matches:
-                    findings.append({
-                        'type': 'DELAYED_ACTIVATION',
-                        'severity': 'HIGH',
-                        'verdict': 'SUSPICIOUS',
-                        'description': 'Extension may delay malicious behavior to evade detection',
-                        'impact': 'Malware remains dormant for days/weeks before activating',
-                        'evidence': {
-                            'file': str(js_file.name),
-                            'location': str(js_file.relative_to(extension_path)),
-                            'indicators_found': matches
-                        },
-                        'technique': 'Time-bomb: Extension tracks install date and delays payload delivery',
-                        'recommendation': 'Monitor extension behavior over extended period'
-                    })
+                        # Only flag delays > 24 hours (86400000 ms)
+                        if delay_ms and delay_ms > 86400000:
+                            static_indicators.append({
+                                'file': str(js_file.name),
+                                'description': description,
+                                'delay_ms': delay_ms,
+                                'delay_hours': round(delay_ms / 3600000, 1)
+                            })
 
             except Exception:
                 pass
+
+        # CRITICAL RULE: Only report if BOTH static AND dynamic evidence exist
+        if static_indicators:
+            # Check if we have dynamic evidence
+            has_dynamic_evidence = False
+            dynamic_details = None
+
+            if dynamic_evidence:
+                # Check if Cuckoo observed delayed behavior
+                if dynamic_evidence.get('delayed_behavior_observed'):
+                    has_dynamic_evidence = True
+                    dynamic_details = dynamic_evidence.get('details', {})
+
+            if has_dynamic_evidence:
+                # BOTH evidences present - report finding
+                findings.append({
+                    'type': 'DELAYED_ACTIVATION_CONFIRMED',
+                    'severity': 'HIGH',
+                    'verdict': 'SUSPICIOUS',
+                    'confidence': 'HIGH',
+                    'description': 'Extension exhibits time-gated behavior (confirmed by both static and dynamic analysis)',
+                    'impact': 'Extension may delay malicious activity to evade initial detection',
+                    'static_evidence': static_indicators,
+                    'dynamic_evidence': dynamic_details,
+                    'recommendation': 'Long-term monitoring recommended. Verify if delay aligns with legitimate functionality.'
+                })
+            else:
+                # Only static evidence - report as POTENTIAL, not confirmed
+                findings.append({
+                    'type': 'DELAYED_ACTIVATION_POTENTIAL',
+                    'severity': 'LOW',
+                    'verdict': 'REQUIRES_VERIFICATION',
+                    'confidence': 'LOW',
+                    'description': 'Code contains long-duration timers. Could be legitimate (scheduled tasks) or malicious (time bomb).',
+                    'impact': 'Static analysis only - dynamic verification required',
+                    'static_evidence': static_indicators,
+                    'dynamic_evidence': 'NOT OBSERVED - Dynamic analysis did not confirm delayed activation',
+                    'recommendation': 'Manual review required. Many extensions legitimately use timers for scheduled tasks, updates, or reminders.'
+                })
 
         return findings
 
@@ -389,12 +432,13 @@ class AdvancedDetector:
 
         return findings
 
-    def run_all_detections(self, extension_path):
+    def run_all_detections(self, extension_path, dynamic_evidence=None):
         """
         Run all advanced detection techniques
 
         Args:
             extension_path: Path to unpacked extension
+            dynamic_evidence: Optional dynamic analysis results from Cuckoo Sandbox
 
         Returns:
             dict: All findings categorized by type
@@ -405,7 +449,7 @@ class AdvancedDetector:
             'csp_manipulation': self.detect_csp_manipulation(extension_path),
             'dom_event_injection': self.detect_dom_event_injection(extension_path),
             'websocket_c2': self.detect_websocket_c2(extension_path),
-            'delayed_activation': self.detect_delayed_activation(extension_path),
+            'delayed_activation': self.detect_delayed_activation(extension_path, dynamic_evidence=dynamic_evidence),
             'obfuscation': self.detect_obfuscation(extension_path)
         }
 

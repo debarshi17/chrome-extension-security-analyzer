@@ -24,26 +24,54 @@ class DomainIntelligence:
             'azure.com', 'azurewebsites.net', 'windows.net',
             'googleusercontent.com', 'googleapis.com', 'gstatic.com',
             'cloudflare.com', 'cloudflare.net', 'cf-ipfs.com',
-            
+
+            # Google Cloud Platform (GCP)
+            'cloudfunctions.net',      # Cloud Functions (serverless)
+            'run.app',                  # Cloud Run (containers)
+            'appspot.com',              # App Engine
+            'firebaseio.com',           # Firebase Realtime Database
+            'firebase.io',              # Firebase (alternative domain)
+            'firebaseapp.com',          # Firebase Hosting
+            'googleplex.com',           # Google internal
+
+            # AWS Services
+            'elasticbeanstalk.com',     # AWS Elastic Beanstalk
+            'lambda-url.amazonaws.com', # AWS Lambda Function URLs
+            's3.amazonaws.com',         # S3 storage
+
+            # Azure Services
+            'azurefd.net',              # Azure Front Door
+            'azureedge.net',            # Azure CDN
+            'core.windows.net',         # Azure Storage
+
+            # Platform-as-a-Service (PaaS)
+            'herokuapp.com',            # Heroku
+            'vercel.app',               # Vercel
+            'netlify.app',              # Netlify
+            'pages.dev',                # Cloudflare Pages
+            'railway.app',              # Railway
+            'render.com',               # Render
+            'fly.dev',                  # Fly.io
+
             # CDNs
             'akamai.net', 'akamaitechnologies.com', 'akamaized.net',
             'fastly.net', 'jsdelivr.net', 'unpkg.com', 'cdnjs.cloudflare.com',
-            
+
             # Email providers
             'gmail.com', 'outlook.com', 'yahoo.com', 'protonmail.com',
             'mail.google.com', 'mail.yahoo.com',
-            
+
             # Social media
             'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com',
             'youtube.com', 'reddit.com', 'tiktok.com', 'pinterest.com',
-            
+
             # Tech companies
             'google.com', 'microsoft.com', 'apple.com', 'amazon.com',
             'github.com', 'gitlab.com', 'bitbucket.org',
-            
+
             # Payment processors
             'stripe.com', 'paypal.com', 'square.com',
-            
+
             # Analytics & monitoring
             'google-analytics.com', 'googletagmanager.com',
             'segment.com', 'mixpanel.com', 'amplitude.com',
@@ -393,23 +421,69 @@ class DomainIntelligence:
         (Without API access, we check for patterns common in NRDs)
         """
         indicators = []
-        
+
         # Pattern 1: Very long domains (often used to avoid detection)
-        if len(domain) > 30:
-            indicators.append('Unusually long domain name')
-        
+        # Exception: Cloud provider domains can be long (e.g., AWS)
+        if len(domain) > 50:  # Increased threshold
+            # Check if it's a cloud provider (already validated as legitimate above)
+            if not self._is_cloud_provider_subdomain(domain):
+                indicators.append('Unusually long domain name')
+
         # Pattern 2: Mixed case or numbers in unusual positions
         parts = domain.split('.')
         if len(parts) >= 2:
             base = parts[-2]
-            if any(c.isdigit() for c in base[:3]):  # Numbers at start
+            # Exception: Cloud providers use region codes (us-central1, eu-west-1)
+            if any(c.isdigit() for c in base[:3]) and not self._is_cloud_provider_subdomain(domain):
                 indicators.append('Numbers in unusual positions')
-        
+
         # Pattern 3: Suspicious subdomain structure
-        if len(parts) > 3:  # Multiple subdomains
-            indicators.append('Complex subdomain structure')
-        
+        # Cloud providers commonly use subdomains: <region>-<project>.cloudfunctions.net
+        # Only flag if >4 parts AND not a known cloud pattern
+        if len(parts) > 4:  # More lenient threshold
+            if not self._is_cloud_provider_subdomain(domain):
+                indicators.append('Complex subdomain structure')
+
         return indicators
+
+    def _is_cloud_provider_subdomain(self, domain):
+        """Check if domain follows cloud provider subdomain patterns"""
+        # Check if it's already in legitimate infrastructure
+        for legit in self.legitimate_infrastructure:
+            if domain.endswith('.' + legit):
+                return True
+
+        # Check for common cloud provider patterns
+        cloud_patterns = [
+            # GCP patterns
+            r'\.cloudfunctions\.net$',
+            r'\.run\.app$',
+            r'\.appspot\.com$',
+            r'\.firebaseio\.com$',
+            r'\.firebaseapp\.com$',
+
+            # AWS patterns
+            r'\.amazonaws\.com$',
+            r'\.elasticbeanstalk\.com$',
+
+            # Azure patterns
+            r'\.azurewebsites\.net$',
+            r'\.azurefd\.net$',
+            r'\.core\.windows\.net$',
+
+            # PaaS patterns
+            r'\.herokuapp\.com$',
+            r'\.vercel\.app$',
+            r'\.netlify\.app$',
+            r'\.pages\.dev$',
+        ]
+
+        import re
+        for pattern in cloud_patterns:
+            if re.search(pattern, domain):
+                return True
+
+        return False
     
     def _analyze_c2_patterns(self, url, context):
         """

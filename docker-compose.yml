@@ -1,0 +1,113 @@
+version: '3.8'
+
+services:
+  # Cuckoo Sandbox - Dynamic Malware Analysis
+  cuckoo:
+    image: blacktop/cuckoo:latest
+    container_name: cuckoo-sandbox
+    hostname: cuckoo
+    command: api --host 0.0.0.0 --port 1337
+    ports:
+      - "8090:1337"  # REST API for extension analyzer integration (maps 8090 -> 1337)
+      - "8000:8000"  # Web UI (optional)
+    volumes:
+      # Persistent storage for analysis results
+      - cuckoo-data:/cuckoo
+      - cuckoo-storage:/cuckoo/storage
+      - ./downloads:/downloads:ro  # Read-only access to downloaded extensions
+    environment:
+      # Cuckoo configuration
+      - CUCKOO_MACHINERY=virtualbox
+      - CUCKOO_MEMORY=4096
+      - CUCKOO_CPUS=2
+
+      # API configuration
+      - CUCKOO_API_HOST=0.0.0.0
+      - CUCKOO_API_PORT=8090
+
+      # ResultServer (receives data from analysis VM)
+      - CUCKOO_RESULTSERVER_IP=192.168.56.1
+      - CUCKOO_RESULTSERVER_PORT=2042
+
+      # Database
+      - CUCKOO_DB_CONNECTION=postgresql://cuckoo:cuckoo@postgres:5432/cuckoo
+    depends_on:
+      - postgres
+    networks:
+      - cuckoo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/cuckoo/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # PostgreSQL Database for Cuckoo
+  postgres:
+    image: postgres:14-alpine
+    container_name: cuckoo-postgres
+    environment:
+      - POSTGRES_USER=cuckoo
+      - POSTGRES_PASSWORD=cuckoo
+      - POSTGRES_DB=cuckoo
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - cuckoo-net
+    restart: unless-stopped
+
+  # MongoDB for Cuckoo (optional, for advanced features)
+  mongo:
+    image: mongo:5-focal
+    container_name: cuckoo-mongo
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - cuckoo-net
+    restart: unless-stopped
+
+volumes:
+  cuckoo-data:
+    driver: local
+  cuckoo-storage:
+    driver: local
+  postgres-data:
+    driver: local
+  mongo-data:
+    driver: local
+
+networks:
+  cuckoo-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.56.0/24
+          gateway: 192.168.56.1
+
+# Usage Instructions:
+#
+# 1. Start Cuckoo Sandbox:
+#    docker-compose up -d
+#
+# 2. Check status:
+#    docker-compose ps
+#    curl http://localhost:8090/cuckoo/status
+#
+# 3. View logs:
+#    docker-compose logs -f cuckoo
+#
+# 4. Access Web UI:
+#    Open http://localhost:8000 in browser
+#
+# 5. Test integration:
+#    python src/analyzer.py pdadlkbckhinonakkfkdaadceojbekep
+#
+# 6. Stop Cuckoo:
+#    docker-compose down
+#
+# Note: This is a basic setup. For production use, you'll need to:
+# - Set up Windows VM with VirtualBox
+# - Configure VM snapshot
+# - Enable network monitoring
+# - See CUCKOO_SETUP.md for detailed instructions
