@@ -1,6 +1,11 @@
 """
 VirusTotal Domain Reputation Checker
 Securely checks domains against VirusTotal API
+
+PERFORMANCE OPTIMIZATIONS:
+- Results caching: Stores VT results to avoid re-checking same domains
+- Cache validity: 24 hours for clean domains, 1 hour for suspicious/malicious
+- Safe domain whitelist: Skips checking well-known legitimate domains
 """
 
 import json
@@ -20,6 +25,39 @@ class VirusTotalChecker:
         '.download', '.stream', '.science', '.faith'
     ]
 
+    # Safe domains - skip VT checking (standards bodies, CDNs, well-known legitimate services)
+    SAFE_DOMAINS = {
+        # Web standards organizations
+        'w3.org', 'www.w3.org', 'w3c.org', 'whatwg.org',
+        'ecma-international.org', 'ietf.org', 'rfc-editor.org',
+
+        # Major CDNs
+        'cdnjs.cloudflare.com', 'cdn.jsdelivr.net', 'unpkg.com',
+        'ajax.googleapis.com', 'fonts.googleapis.com', 'fonts.gstatic.com',
+
+        # Google services
+        'google.com', 'www.google.com', 'apis.google.com',
+        'accounts.google.com', 'docs.google.com', 'drive.google.com',
+        'chrome.google.com', 'clients2.google.com',
+
+        # Mozilla
+        'mozilla.org', 'www.mozilla.org', 'developer.mozilla.org', 'addons.mozilla.org',
+
+        # Microsoft
+        'microsoft.com', 'www.microsoft.com', 'docs.microsoft.com',
+        'login.microsoftonline.com', 'graph.microsoft.com',
+
+        # Apple
+        'apple.com', 'www.apple.com', 'developer.apple.com',
+
+        # GitHub
+        'github.com', 'raw.githubusercontent.com', 'api.github.com',
+        'gist.github.com', 'github.io',
+
+        # Common legitimate extension infrastructure
+        'chrome-extension-api.com', 'extension.dev',
+    }
+
     def __init__(self):
         self.api_key = self._load_api_key()
         self.base_url = "https://www.virustotal.com/api/v3"
@@ -29,6 +67,14 @@ class VirusTotalChecker:
                 "x-apikey": self.api_key
             })
         self.rate_limit_delay = 15  # Free API: 4 requests/minute
+
+        # PERFORMANCE: Load results cache to avoid re-checking domains
+        self._cache = self._load_cache()
+        self._cache_path = Path(__file__).parent.parent / 'data' / 'vt_cache.json'
+
+        # Cache validity periods (in hours)
+        self._cache_ttl_clean = 24  # Clean domains cached for 24 hours
+        self._cache_ttl_suspicious = 1  # Suspicious/malicious rechecked hourly
     
     def _load_api_key(self):
         """Load API key from config file"""
@@ -51,6 +97,82 @@ class VirusTotalChecker:
         except Exception as e:
             print(f"[!] Error loading config: {e}")
             return None
+
+    def _load_cache(self):
+        """Load VT results cache from disk"""
+        cache_path = Path(__file__).parent.parent / 'data' / 'vt_cache.json'
+        try:
+            if cache_path.exists():
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"[i] VT cache load failed: {e}")
+        return {'domains': {}, 'metadata': {'created': datetime.now(timezone.utc).isoformat()}}
+
+    def _save_cache(self):
+        """Save VT results cache to disk"""
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self._cache['metadata']['updated'] = datetime.now(timezone.utc).isoformat()
+            with open(self._cache_path, 'w', encoding='utf-8') as f:
+                json.dump(self._cache, f, indent=2)
+        except Exception as e:
+            print(f"[i] VT cache save failed: {e}")
+
+    def _get_cached_result(self, domain):
+        """Get cached VT result if valid
+
+        Returns cached result if:
+        - Domain is in cache AND
+        - Cache entry is not expired based on threat level
+
+        Cache TTL:
+        - CLEAN: 24 hours (safe domains change rarely)
+        - SUSPICIOUS/MALICIOUS: 1 hour (re-check frequently)
+        """
+        if domain not in self._cache.get('domains', {}):
+            return None
+
+        cached = self._cache['domains'][domain]
+        cached_time = cached.get('cached_at')
+
+        if not cached_time:
+            return None
+
+        try:
+            cache_dt = datetime.fromisoformat(cached_time.replace('Z', '+00:00'))
+            now = datetime.now(timezone.utc)
+            age_hours = (now - cache_dt).total_seconds() / 3600
+
+            threat_level = cached.get('result', {}).get('threat_level', 'CLEAN')
+
+            # Check if cache is still valid
+            if threat_level in ['MALICIOUS', 'SUSPICIOUS']:
+                if age_hours < self._cache_ttl_suspicious:
+                    print(f"[VT] Cache hit: {domain} ({threat_level}, {age_hours:.1f}h old)")
+                    return cached['result']
+            else:
+                if age_hours < self._cache_ttl_clean:
+                    print(f"[VT] Cache hit: {domain} (clean, {age_hours:.1f}h old)")
+                    return cached['result']
+
+        except Exception:
+            pass
+
+        return None
+
+    def _cache_result(self, domain, result):
+        """Cache a VT result"""
+        if 'domains' not in self._cache:
+            self._cache['domains'] = {}
+
+        self._cache['domains'][domain] = {
+            'cached_at': datetime.now(timezone.utc).isoformat(),
+            'result': result
+        }
+        # Save to disk periodically (every 5 domains cached)
+        if len(self._cache['domains']) % 5 == 0:
+            self._save_cache()
 
     def _calculate_domain_age(self, creation_timestamp):
         """
@@ -145,11 +267,41 @@ class VirusTotalChecker:
     def check_domain(self, domain):
         """
         Check domain reputation on VirusTotal
-        
+
+        PERFORMANCE: Checks cache first, then safe domain whitelist,
+        then makes API call only if necessary.
+
         Returns:
             dict: Reputation data with scores, verdicts, and community votes
         """
-        
+        domain_lower = domain.lower()
+
+        # OPTIMIZATION 1: Check cache first (fastest)
+        cached_result = self._get_cached_result(domain_lower)
+        if cached_result:
+            return cached_result
+
+        # OPTIMIZATION 2: Skip safe domains - no need to check well-known legitimate services
+        if domain_lower in self.SAFE_DOMAINS or any(domain_lower.endswith('.' + safe) for safe in self.SAFE_DOMAINS):
+            result = {
+                'available': True,
+                'domain': domain,
+                'known': True,
+                'skipped': True,
+                'threat_level': 'CLEAN',
+                'message': 'Known safe domain (skipped VT check)',
+                'malicious': 0,
+                'suspicious': 0,
+                'harmless': 1,
+                'undetected': 0,
+                'reputation': 100,
+                'malicious_vendors': [],
+                'suspicious_vendors': []
+            }
+            # Cache safe domain result (with long TTL)
+            self._cache_result(domain_lower, result)
+            return result
+
         if not self.api_key:
             return {
                 'available': False,
@@ -251,7 +403,7 @@ class VirusTotalChecker:
                 if threat_level == 'SUSPICIOUS' and combined_risk_score >= 5:
                     threat_level = 'MALICIOUS'
             
-            return {
+            result = {
                 'available': True,
                 'domain': domain,
                 'known': True,
@@ -275,7 +427,11 @@ class VirusTotalChecker:
                 'combined_risk_score': combined_risk_score,
                 'url': f"https://www.virustotal.com/gui/domain/{domain}"
             }
-            
+
+            # OPTIMIZATION: Cache result for future lookups
+            self._cache_result(domain_lower, result)
+            return result
+
         except requests.exceptions.Timeout:
             return {
                 'available': False,
@@ -313,9 +469,15 @@ class VirusTotalChecker:
         # Summary
         malicious = sum(1 for r in results if r.get('threat_level') == 'MALICIOUS')
         suspicious = sum(1 for r in results if r.get('threat_level') == 'SUSPICIOUS')
-        
+        cached = sum(1 for r in results if r.get('skipped') or 'Cache hit' in str(r.get('message', '')))
+
         print(f"\n[VT] Summary: {malicious} malicious, {suspicious} suspicious, {len(results) - malicious - suspicious} clean/unknown")
-        
+        if cached > 0:
+            print(f"[VT] Performance: {cached} domains from cache (saved {cached * 15}s)")
+
+        # Save cache to disk at end of batch
+        self._save_cache()
+
         return results
 
 

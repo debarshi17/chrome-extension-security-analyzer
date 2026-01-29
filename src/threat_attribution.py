@@ -154,57 +154,74 @@ class ThreatAttribution:
 
         all_urls_collected = set()
         MAX_RESULTS_TO_PROCESS = 50  # ~15 pages worth
+        EARLY_EXIT_THRESHOLD = 3  # Stop searching if we find 3+ confirming articles
 
         print(f"[i] Comprehensive web search for extension ID (targeting {MAX_RESULTS_TO_PROCESS} results)...")
 
-        # Search Engine 1: DuckDuckGo (multiple pages)
-        try:
-            print(f"[i] Searching DuckDuckGo...")
-            ddg_urls = self._search_duckduckgo(extension_id)
-            all_urls_collected.update(ddg_urls)
-            results['search_engines_used'].append('DuckDuckGo')
-            print(f"    Found {len(ddg_urls)} results from DuckDuckGo")
-        except Exception as e:
-            print(f"[!] DuckDuckGo search failed: {e}")
-
-        # Search Engine 2: Bing/Ecosia (more pages, better for security research)
-        try:
-            print(f"[i] Searching Bing/Ecosia...")
-            bing_urls = self._search_bing(extension_id)
-            new_bing_urls = bing_urls - all_urls_collected
-            all_urls_collected.update(bing_urls)
-            results['search_engines_used'].append('Bing/Ecosia')
-            print(f"    Found {len(bing_urls)} results ({len(new_bing_urls)} new)")
-        except Exception as e:
-            print(f"[!] Bing/Ecosia search failed: {e}")
-
-        # Search Engine 3: Startpage (Google proxy, better results)
-        try:
-            print(f"[i] Searching Startpage...")
-            sp_urls = self._search_startpage(extension_id)
-            new_sp_urls = sp_urls - all_urls_collected
-            all_urls_collected.update(sp_urls)
-            results['search_engines_used'].append('Startpage')
-            print(f"    Found {len(sp_urls)} results ({len(new_sp_urls)} new)")
-        except Exception as e:
-            print(f"[!] Startpage search failed: {e}")
-
-        # Search Engine 4: Direct security site searches (most reliable)
+        # OPTIMIZED: Search engines in order of reliability, with early exit
+        # Priority 1: Direct security sites (most reliable, fastest)
         try:
             print(f"[i] Searching security research sites directly...")
             sec_urls = self._search_security_sites_directly(extension_id)
-            new_sec_urls = sec_urls - all_urls_collected
             all_urls_collected.update(sec_urls)
             results['search_engines_used'].append('Direct Security Sites')
-            print(f"    Found {len(sec_urls)} results ({len(new_sec_urls)} new)")
+            print(f"    Found {len(sec_urls)} results from security sites")
+
+            # If we found results on trusted security sites, we may not need more searches
+            if len(sec_urls) >= 2:
+                print(f"[i] Found results on security sites - using focused search")
         except Exception as e:
             print(f"[!] Direct security site search failed: {e}")
 
+        # Priority 2: DuckDuckGo (privacy-friendly, good results)
+        try:
+            print(f"[i] Searching DuckDuckGo...")
+            ddg_urls = self._search_duckduckgo(extension_id)
+            new_ddg_urls = ddg_urls - all_urls_collected
+            all_urls_collected.update(ddg_urls)
+            results['search_engines_used'].append('DuckDuckGo')
+            print(f"    Found {len(ddg_urls)} results ({len(new_ddg_urls)} new)")
+        except Exception as e:
+            print(f"[!] DuckDuckGo search failed: {e}")
+
+        # Priority 3: Only search more engines if we don't have enough results yet
+        if len(all_urls_collected) < 10:
+            # Search Engine 3: Bing/Ecosia
+            try:
+                print(f"[i] Searching Bing/Ecosia (need more results)...")
+                bing_urls = self._search_bing(extension_id)
+                new_bing_urls = bing_urls - all_urls_collected
+                all_urls_collected.update(bing_urls)
+                results['search_engines_used'].append('Bing/Ecosia')
+                print(f"    Found {len(bing_urls)} results ({len(new_bing_urls)} new)")
+            except Exception as e:
+                print(f"[!] Bing/Ecosia search failed: {e}")
+
+            # Search Engine 4: Startpage (only if still need more)
+            if len(all_urls_collected) < 10:
+                try:
+                    print(f"[i] Searching Startpage...")
+                    sp_urls = self._search_startpage(extension_id)
+                    new_sp_urls = sp_urls - all_urls_collected
+                    all_urls_collected.update(sp_urls)
+                    results['search_engines_used'].append('Startpage')
+                    print(f"    Found {len(sp_urls)} results ({len(new_sp_urls)} new)")
+                except Exception as e:
+                    print(f"[!] Startpage search failed: {e}")
+        else:
+            print(f"[i] Skipping additional search engines - have {len(all_urls_collected)} URLs to process")
+
         print(f"[i] Total unique URLs to analyze: {len(all_urls_collected)}")
 
-        # Process all collected URLs
+        # Process all collected URLs with early exit optimization
         processed = 0
+        confirmed_articles = 0
         for url_info in list(all_urls_collected)[:MAX_RESULTS_TO_PROCESS]:
+            # EARLY EXIT: Stop if we have enough confirming evidence
+            if confirmed_articles >= EARLY_EXIT_THRESHOLD and results['is_malicious']:
+                print(f"[i] Early exit: Found {confirmed_articles} confirming articles - sufficient evidence")
+                break
+
             if isinstance(url_info, tuple):
                 href, title = url_info
             else:
@@ -267,13 +284,16 @@ class ThreatAttribution:
                             })
 
                         processed += 1
+                        # Track confirming articles for early exit
+                        if article_info['keywords_found'] or is_trusted:
+                            confirmed_articles += 1
                         print(f"    [+] Found mention in: {self._extract_domain(href)}")
 
             except Exception as e:
                 # Skip pages that fail to load
                 continue
 
-            time.sleep(0.3)  # Be respectful to servers
+            time.sleep(0.2)  # Reduced from 0.3s for faster processing
 
         print(f"[i] Analyzed {len(all_urls_collected)} URLs, found {len(results['articles'])} with extension mentions")
 
@@ -339,7 +359,7 @@ class ThreatAttribution:
         return urls
 
     def _search_bing(self, extension_id):
-        """Search Bing with pagination for more results (up to 150 results / 15 pages)"""
+        """Search Bing with pagination (optimized: 5 pages max for speed)"""
         urls = set()
 
         # Try different Bing-compatible endpoints
@@ -349,7 +369,7 @@ class ThreatAttribution:
         ]
 
         for base_url, endpoint_type in endpoints:
-            for page in range(0, 10):  # 10 pages per engine
+            for page in range(0, 5):  # OPTIMIZED: 5 pages (was 10) for faster searches
                 try:
                     if endpoint_type == 'ecosia':
                         search_url = base_url.format(ext=extension_id, page=page)

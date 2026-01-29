@@ -19,6 +19,10 @@ class DomainIntelligence:
     def __init__(self):
         # Legitimate infrastructure (CDNs, APIs, services)
         self.legitimate_infrastructure = {
+            # Web standards organizations (ALWAYS SAFE)
+            'w3.org', 'w3c.org', 'whatwg.org', 'ecma-international.org',
+            'ietf.org', 'rfc-editor.org', 'json-schema.org', 'schema.org',
+
             # Major cloud providers
             'amazonaws.com', 'cloudfront.net', 'awsstatic.com',
             'azure.com', 'azurewebsites.net', 'windows.net',

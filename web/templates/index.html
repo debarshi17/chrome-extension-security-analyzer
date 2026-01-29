@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chrome Extension Security Analyzer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+            min-height: 100vh;
+            color: #f1f5f9;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            color: #94a3b8;
+            font-size: 1.1rem;
+        }
+
+        .search-box {
+            background: rgba(30, 41, 59, 0.8);
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(71, 85, 105, 0.5);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 16px 20px;
+            font-size: 16px;
+            border: 2px solid #475569;
+            border-radius: 10px;
+            background: #0f172a;
+            color: #f1f5f9;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input[type="text"]:focus {
+            border-color: #60a5fa;
+            box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.2);
+        }
+
+        input[type="text"]::placeholder {
+            color: #64748b;
+        }
+
+        button {
+            padding: 16px 32px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            color: white;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .help-text {
+            font-size: 13px;
+            color: #64748b;
+            margin-top: 15px;
+        }
+
+        .help-text code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: #94a3b8;
+        }
+
+        .status {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+        }
+
+        .status.loading {
+            display: block;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .status.success {
+            display: block;
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .status.error {
+            display: block;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #60a5fa;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .result-link {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+
+        .result-link:hover {
+            transform: translateY(-2px);
+        }
+
+        .recent-scans {
+            margin-top: 50px;
+        }
+
+        .recent-scans h3 {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            color: #94a3b8;
+        }
+
+        .scan-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .scan-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px 20px;
+            background: rgba(30, 41, 59, 0.5);
+            border-radius: 8px;
+            border: 1px solid rgba(71, 85, 105, 0.3);
+        }
+
+        .scan-item code {
+            color: #60a5fa;
+            font-size: 14px;
+        }
+
+        .scan-item a {
+            color: #a78bfa;
+            text-decoration: none;
+            font-size: 14px;
+        }
+
+        .scan-item a:hover {
+            text-decoration: underline;
+        }
+
+        .risk-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            margin-left: 10px;
+        }
+
+        .risk-critical { background: #dc2626; color: white; }
+        .risk-high { background: #ea580c; color: white; }
+        .risk-medium { background: #f59e0b; color: black; }
+        .risk-low { background: #22c55e; color: white; }
+
+        footer {
+            text-align: center;
+            margin-top: 60px;
+            padding: 20px;
+            color: #64748b;
+            font-size: 14px;
+        }
+
+        footer a {
+            color: #60a5fa;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Extension Security Analyzer</h1>
+            <p class="subtitle">Scan Chrome extensions for malicious code patterns</p>
+        </header>
+
+        <div class="search-box">
+            <div class="input-group">
+                <input
+                    type="text"
+                    id="extensionId"
+                    placeholder="Enter Chrome Extension ID (32 characters)"
+                    maxlength="32"
+                    pattern="[a-z]{32}"
+                >
+                <button id="analyzeBtn" onclick="analyze()">Analyze</button>
+            </div>
+            <p class="help-text">
+                Find the extension ID in the Chrome Web Store URL:<br>
+                <code>chrome.google.com/webstore/detail/name/<strong>abcdefghijklmnopqrstuvwxyz123456</strong></code>
+            </p>
+
+            <div id="status" class="status"></div>
+        </div>
+
+        <div class="recent-scans" id="recentScans">
+            <h3>Recent Scans</h3>
+            <div class="scan-list" id="scanList">
+                <p style="color: #64748b;">No recent scans</p>
+            </div>
+        </div>
+
+        <footer>
+            <p>Open source security tool | <a href="https://github.com/debarshi17/chrome-extension-security-analyzer" target="_blank">GitHub</a></p>
+        </footer>
+    </div>
+
+    <script>
+        // Load recent scans on page load
+        loadRecentScans();
+
+        async function analyze() {
+            const input = document.getElementById('extensionId');
+            const btn = document.getElementById('analyzeBtn');
+            const status = document.getElementById('status');
+
+            const extensionId = input.value.trim().toLowerCase();
+
+            // Validate
+            if (!/^[a-z]{32}$/.test(extensionId)) {
+                status.className = 'status error';
+                status.innerHTML = '❌ Invalid extension ID. Must be exactly 32 lowercase letters.';
+                return;
+            }
+
+            // Show loading
+            btn.disabled = true;
+            status.className = 'status loading';
+            status.innerHTML = '<span class="spinner"></span> Analyzing extension... This may take 30-60 seconds.';
+
+            try {
+                const response = await fetch('/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ extension_id: extensionId })
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.status === 'complete') {
+                    const riskClass = getRiskClass(data.risk_level);
+                    status.className = 'status success';
+                    status.innerHTML = `
+                        ✅ Analysis complete!
+                        <span class="risk-badge ${riskClass}">${data.risk_level}</span>
+                        <span style="margin-left: 10px;">Score: ${data.risk_score}/10</span>
+                        <br>
+                        <a href="${data.report_url}" class="result-link" target="_blank">View Full Report</a>
+                    `;
+                    loadRecentScans();
+                } else {
+                    status.className = 'status error';
+                    status.innerHTML = `❌ ${data.detail || data.message || 'Analysis failed'}`;
+                }
+            } catch (error) {
+                status.className = 'status error';
+                status.innerHTML = `❌ Error: ${error.message}`;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function getRiskClass(level) {
+            const classes = {
+                'CRITICAL': 'risk-critical',
+                'HIGH': 'risk-high',
+                'MEDIUM': 'risk-medium',
+                'LOW': 'risk-low'
+            };
+            return classes[level] || 'risk-medium';
+        }
+
+        async function loadRecentScans() {
+            try {
+                const response = await fetch('/api/recent');
+                const data = await response.json();
+
+                const scanList = document.getElementById('scanList');
+
+                if (data.scans && data.scans.length > 0) {
+                    scanList.innerHTML = data.scans.map(scan => `
+                        <div class="scan-item">
+                            <code>${scan.extension_id}</code>
+                            <a href="${scan.report_url}" target="_blank">View Report →</a>
+                        </div>
+                    `).join('');
+                }
+            } catch (error) {
+                console.error('Failed to load recent scans:', error);
+            }
+        }
+
+        // Allow Enter key to submit
+        document.getElementById('extensionId').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                analyze();
+            }
+        });
+    </script>
+</body>
+</html>

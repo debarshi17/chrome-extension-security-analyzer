@@ -1516,6 +1516,9 @@ class ProfessionalReportGenerator:
             html += '<div class="no-data">✅ No malicious code patterns detected</div>'
         else:
             for threat in high_patterns + medium_patterns:
+                # Generate context analysis explaining HOW the function is used
+                context_analysis = self._generate_context_analysis(threat)
+
                 html += f"""
             <div class="threat-item {threat.get('severity', 'medium')}">
                 <div class="threat-header">
@@ -1523,6 +1526,13 @@ class ProfessionalReportGenerator:
                     <div class="threat-severity {threat.get('severity', 'medium')}">{threat.get('severity', 'medium')}</div>
                 </div>
                 <div class="threat-description">{threat.get('description', 'No description available')}</div>
+"""
+                # Add context analysis if available
+                if context_analysis:
+                    html += f"""
+                <div class="context-analysis" style="margin: 10px 0; padding: 12px 15px; background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 13px; color: #cbd5e1; line-height: 1.5;">
+                    <strong style="color: #60a5fa;">Context Analysis:</strong> {context_analysis}
+                </div>
 """
                 
                 # CRITICAL: Show exact POST destination
@@ -1720,8 +1730,97 @@ class ProfessionalReportGenerator:
         
         # Comments
         code_line = re.sub(r'(//.*$)', r'<span class="code-comment">\1</span>', code_line)
-        
+
         return code_line
+
+    def _generate_context_analysis(self, threat):
+        """
+        Generate 1-2 lines explaining HOW the suspicious function is used in context.
+        This helps analysts understand the actual behavior, not just that a pattern was detected.
+        """
+        name = threat.get('name', '').lower()
+        context = threat.get('context', '') or threat.get('evidence', '') or ''
+        context_lower = context.lower()
+        technique = threat.get('technique', '')
+
+        # WebAssembly context analysis
+        if 'webassembly' in name:
+            if 'crypto' in context_lower or 'miner' in context_lower or 'hash' in context_lower:
+                return "This script loads WebAssembly code and contains crypto/mining-related keywords, suggesting potential cryptocurrency mining behavior."
+            elif 'wasm' in context_lower and ('fetch' in context_lower or 'load' in context_lower):
+                return "The script fetches and instantiates a WebAssembly module from an external source. WebAssembly can execute native-speed code for legitimate purposes (image processing, games) or malicious ones (crypto mining, bypassing JS analysis)."
+            else:
+                return "WebAssembly is used in this script. While WASM has legitimate uses (performance-critical code), it can also be used to hide malicious logic or perform crypto mining. Review the WASM module's purpose."
+
+        # Keylogger detection context
+        if 'key' in name and ('log' in name or 'event' in name or 'stroke' in name):
+            if 'password' in context_lower:
+                return "A keyboard event listener is attached that appears to target password fields. This is a strong indicator of credential theft - the extension is capturing keystrokes in password inputs."
+            elif 'buffer' in context_lower or 'push' in context_lower or 'array' in context_lower:
+                return "Keystrokes are being collected into a buffer/array. This buffering pattern is typical of keyloggers that batch-send captured data to avoid detection."
+            else:
+                return "A keyboard event listener is registered. Could be legitimate (hotkeys, shortcuts) or malicious (keylogging). Check if it's scoped to specific UI elements or captures all keystrokes."
+
+        # Screen capture context
+        if 'capture' in name or 'screenshot' in name:
+            if 'formdata' in context_lower or 'upload' in context_lower or 'post' in context_lower:
+                return "Screenshots are being captured and uploaded to a server. This is surveillance behavior - the extension is exfiltrating visual data from the user's browsing session."
+            elif 'encrypt' in context_lower or 'aes' in context_lower or 'rsa' in context_lower:
+                return "Screenshots are captured and encrypted before transmission. Encryption hides the exfiltrated content from network inspection, making detection harder."
+            else:
+                return "Screen capture API is used. This allows the extension to take screenshots of browser tabs or the desktop, potentially capturing sensitive information displayed on screen."
+
+        # Data exfiltration context
+        if 'exfil' in name or 'post' in name or 'beacon' in name:
+            if 'cookie' in context_lower or 'session' in context_lower:
+                return "Data is being sent to an external server, and the code references cookies/sessions. This suggests session hijacking - the extension may be stealing authentication tokens."
+            elif 'password' in context_lower or 'credential' in context_lower:
+                return "Data exfiltration is occurring with credential-related keywords present. The extension appears to be stealing and transmitting user credentials."
+            else:
+                return "Data is being sent to an external server. Review what data is being collected and whether the destination is a legitimate service or a potential C2 server."
+
+        # Eval/code injection context
+        if 'eval' in name or 'function' in name and 'dynamic' in name:
+            if 'fetch' in context_lower or 'http' in context_lower:
+                return "Dynamic code execution combined with network requests. This is a remote code execution pattern - the extension fetches code from a server and executes it, allowing attackers to change behavior without updating the extension."
+            elif 'atob' in context_lower or 'base64' in context_lower:
+                return "Code is being decoded from Base64 and executed. This obfuscation technique hides the actual malicious payload from static analysis."
+            else:
+                return "Dynamic code execution (eval/new Function) allows running arbitrary code at runtime. This is dangerous as the executed code cannot be statically analyzed."
+
+        # MutationObserver context
+        if 'mutation' in name or 'observer' in name:
+            if 'password' in context_lower or 'login' in context_lower or 'form' in context_lower:
+                return "A MutationObserver monitors DOM changes with focus on login/password elements. This watches for dynamically loaded login forms to capture credentials as soon as they appear."
+            else:
+                return "A MutationObserver watches for DOM changes. This can be used to detect when sensitive forms are added to the page and immediately begin capturing their data."
+
+        # Cookie/session theft context
+        if 'cookie' in name:
+            if 'getall' in context_lower or 'all' in context_lower:
+                return "The extension accesses all cookies, not just those for specific sites. This allows stealing session tokens from any website, enabling account takeover across multiple services."
+            else:
+                return "Cookie access detected. Cookies often contain session tokens that authenticate users - stealing them allows attackers to hijack user sessions without knowing passwords."
+
+        # Clipboard context
+        if 'clipboard' in name:
+            if 'password' in context_lower or 'crypto' in context_lower or 'wallet' in context_lower:
+                return "Clipboard access combined with sensitive keywords (password/crypto/wallet). Users often copy sensitive data like passwords or cryptocurrency addresses - this extension may be intercepting them."
+            else:
+                return "Clipboard read access detected. Clipboard often contains sensitive copied data like passwords, credit card numbers, or crypto wallet addresses."
+
+        # Default context based on technique
+        if technique:
+            technique_contexts = {
+                'Credential theft': "This pattern is associated with stealing login credentials. Review the surrounding code to determine what data is being accessed and where it's sent.",
+                'Data exfiltration': "This pattern indicates data leaving the browser to an external server. Verify the destination and what data is being transmitted.",
+                'Code injection': "This allows executing arbitrary code, which can perform any action including data theft, UI modification, or loading additional malware.",
+                'Screen capture/surveillance': "Visual data capture can expose any sensitive information visible on screen, including passwords, financial data, and private messages.",
+                'Input monitoring': "Input monitoring can capture everything the user types, including passwords, personal messages, and financial information.",
+            }
+            return technique_contexts.get(technique, f"This pattern is associated with '{technique}' behavior. Review the code context to assess the actual risk.")
+
+        return ""
 
     def _generate_pii_classification_section(self, pii_data):
         """Generate PII/Data Classification section"""
