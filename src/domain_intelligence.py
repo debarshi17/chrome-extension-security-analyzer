@@ -57,9 +57,17 @@ class DomainIntelligence:
             'render.com',               # Render
             'fly.dev',                  # Fly.io
 
+            # GitHub Pages & GitLab Pages (IMPORTANT - subdomains are legitimate projects)
+            'github.io',                # GitHub Pages - subdomains are project sites
+            'gitlab.io',                # GitLab Pages
+            'bitbucket.io',             # Bitbucket Pages
+            'rawgit.com',               # RawGit CDN
+            'raw.githubusercontent.com', # GitHub raw content
+
             # CDNs
             'akamai.net', 'akamaitechnologies.com', 'akamaized.net',
             'fastly.net', 'jsdelivr.net', 'unpkg.com', 'cdnjs.cloudflare.com',
+            'bootstrapcdn.com', 'stackpath.com',
 
             # Email providers
             'gmail.com', 'outlook.com', 'yahoo.com', 'protonmail.com',
@@ -79,6 +87,41 @@ class DomainIntelligence:
             # Analytics & monitoring
             'google-analytics.com', 'googletagmanager.com',
             'segment.com', 'mixpanel.com', 'amplitude.com',
+
+            # Documentation sites
+            'readthedocs.io', 'readthedocs.org', 'gitbook.io',
+            'notion.so', 'confluence.com',
+        }
+
+        # Known legitimate JavaScript libraries and their domains
+        # These should NEVER be flagged as DGA or typosquatting
+        self.known_legitimate_libraries = {
+            # jQuery ecosystem
+            'jquery.com', 'jqueryui.com', 'sizzlejs.com',
+            # UI libraries
+            'select2.org', 'select2.github.io', 'chosen.github.io',
+            'datatables.net', 'handsontable.com',
+            # Frameworks
+            'angularjs.org', 'angular.io', 'reactjs.org', 'vuejs.org',
+            'svelte.dev', 'emberjs.com', 'backbonejs.org',
+            # Utilities
+            'lodash.com', 'underscorejs.org', 'momentjs.com',
+            'date-fns.org', 'dayjs.org',
+            # Build tools
+            'webpack.js.org', 'rollupjs.org', 'parceljs.org',
+            'vitejs.dev', 'esbuild.github.io',
+            # Testing
+            'jestjs.io', 'mochajs.org', 'jasmine.github.io',
+            'cypress.io', 'playwright.dev',
+            # Animation/graphics
+            'd3js.org', 'threejs.org', 'pixijs.com',
+            'greensock.com', 'animejs.com',
+            # Other popular libs
+            'axios-http.com', 'chartjs.org', 'leafletjs.com',
+            'highlightjs.org', 'prismjs.com', 'codemirror.net',
+            'tinymce.com', 'ckeditor.com', 'quilljs.com',
+            'fullcalendar.io', 'sweetalert2.github.io',
+            'dropzonejs.com', 'plyr.io', 'videojs.com',
         }
         
         # Known malicious TLDs (high-risk, low-cost, abuse-prone)
@@ -96,6 +139,37 @@ class DomainIntelligence:
             'digit_ratio': 0.3,  # Too many numbers = suspicious
             'vowel_patterns': ['aeiou', 'ouaei'],  # Uncommon patterns
         }
+
+        # Real DGA regex patterns from known malware families
+        # These are actual patterns observed in malware research
+        self.dga_regex_patterns = [
+            # Conficker-like: 4-10 lowercase letters followed by common TLD
+            (r'^[a-z]{4,10}$', 'Conficker-style (short random letters)', 2),
+
+            # CryptoLocker-like: 12-18 lowercase letters, no vowels or few vowels
+            (r'^[bcdfghjklmnpqrstvwxz]{8,}$', 'CryptoLocker-style (consonant-heavy)', 4),
+
+            # Necurs-like: Random alphanumeric 8-16 chars
+            (r'^[a-z0-9]{12,20}$', 'Necurs-style (long alphanumeric)', 3),
+
+            # Locky-like: Specific patterns with numbers interspersed
+            (r'^[a-z]{2,4}[0-9]{2,4}[a-z]{2,4}[0-9]{0,4}$', 'Locky-style (letter-number pattern)', 4),
+
+            # Ramnit-like: hexadecimal-looking strings
+            (r'^[a-f0-9]{16,32}$', 'Ramnit-style (hex-like)', 5),
+
+            # Emotet-like: Base32-looking strings
+            (r'^[a-z2-7]{16,}$', 'Emotet-style (base32-like)', 4),
+
+            # Generic DGA: No vowels at all in 8+ chars
+            (r'^[bcdfghjklmnpqrstvwxyz0-9]{10,}$', 'No-vowel pattern', 4),
+
+            # Numeric suffix pattern: word + large number
+            (r'^[a-z]{3,8}[0-9]{4,}$', 'Word with large numeric suffix', 3),
+
+            # QakBot-like: lowercase with embedded numbers
+            (r'^[a-z]{2,3}[0-9][a-z]{2,3}[0-9][a-z]{2,3}$', 'QakBot-style (alternating)', 4),
+        ]
     
     def analyze_domain(self, domain, url=None, context=None):
         """
@@ -221,30 +295,68 @@ class DomainIntelligence:
         return assessment
     
     def _is_legitimate_infrastructure(self, domain):
-        """Check if domain is part of legitimate infrastructure"""
+        """Check if domain is part of legitimate infrastructure or known library"""
         domain_lower = domain.lower()
-        
+
+        # Check main infrastructure list
         for legit in self.legitimate_infrastructure:
             if domain_lower == legit or domain_lower.endswith('.' + legit):
                 return True
-        
+
+        # Check known legitimate JS libraries
+        for lib_domain in self.known_legitimate_libraries:
+            if domain_lower == lib_domain or domain_lower.endswith('.' + lib_domain):
+                return True
+
+        # Special case: any *.github.io subdomain is a legitimate GitHub Pages site
+        if domain_lower.endswith('.github.io'):
+            return True
+
+        # Special case: any *.gitlab.io subdomain is a legitimate GitLab Pages site
+        if domain_lower.endswith('.gitlab.io'):
+            return True
+
         return False
     
     def _check_typosquatting(self, domain):
         """
         Check for typosquatting of popular brands
         Returns the legitimate domain if typosquatting detected
+
+        IMPORTANT: Do NOT flag subdomains of legitimate hosting providers
+        e.g., select2.github.io is NOT typosquatting - it's a legitimate project
         """
-        
-        # Extract base domain
+
+        domain_lower = domain.lower()
+
+        # SKIP typosquatting check for legitimate hosting providers
+        # Subdomains on these platforms are legitimate projects, not typosquats
+        legitimate_hosting_suffixes = [
+            '.github.io', '.gitlab.io', '.bitbucket.io',
+            '.herokuapp.com', '.vercel.app', '.netlify.app',
+            '.pages.dev', '.web.app', '.firebaseapp.com',
+            '.azurewebsites.net', '.cloudfront.net',
+            '.s3.amazonaws.com', '.appspot.com',
+        ]
+
+        for suffix in legitimate_hosting_suffixes:
+            if domain_lower.endswith(suffix):
+                return None  # Not typosquatting - legitimate hosting
+
+        # Extract base domain (the registrable part, not subdomains)
         parts = domain.split('.')
         if len(parts) < 2:
             return None
-        
+
+        # Get the second-level domain (e.g., 'google' from 'mail.google.com')
         base = parts[-2].lower()
         tld = parts[-1].lower()
-        
-        # Popular brands to check
+
+        # Skip if base is too short (likely not a typosquat)
+        if len(base) < 4:
+            return None
+
+        # Popular brands to check for typosquatting
         brands = {
             'google': ['google.com', 'googleapis.com'],
             'facebook': ['facebook.com'],
@@ -258,27 +370,36 @@ class DomainIntelligence:
             'linkedin': ['linkedin.com'],
             'github': ['github.com'],
             'dropbox': ['dropbox.com'],
+            'stripe': ['stripe.com'],
+            'cloudflare': ['cloudflare.com'],
         }
-        
+
         # Check for homograph attacks (visual similarity)
         substitutions = {
             '0': 'o', '1': 'l', '3': 'e', '5': 's',
             'vv': 'w', 'rn': 'm', 'cl': 'd'
         }
-        
+
         for brand, legit_domains in brands.items():
+            # Skip if the domain IS the legitimate brand
+            if base == brand:
+                return None
+
             # Check exact typo (1-2 char difference)
-            if self._levenshtein_distance(base, brand) in [1, 2]:
-                return legit_domains[0]
-            
+            # But only if the base is similar LENGTH to the brand (±2 chars)
+            if abs(len(base) - len(brand)) <= 2:
+                distance = self._levenshtein_distance(base, brand)
+                if distance in [1, 2]:
+                    return legit_domains[0]
+
             # Check homograph (character substitution)
             normalized_base = base
             for fake, real in substitutions.items():
                 normalized_base = normalized_base.replace(fake, real)
-            
-            if normalized_base == brand:
+
+            if normalized_base == brand and base != brand:
                 return legit_domains[0]
-        
+
         return None
     
     def _levenshtein_distance(self, s1, s2):
@@ -305,69 +426,97 @@ class DomainIntelligence:
         """
         Detect Domain Generation Algorithm (DGA) patterns
         Based on research from Alexa, Cisco Umbrella, and academic papers
+
+        IMPORTANT: Only flag domains that match MULTIPLE DGA indicators
+        A single indicator is not sufficient for DGA classification
         """
-        
-        # Extract base domain
+
+        # Extract base domain (second-level domain)
         parts = domain.split('.')
         if len(parts) < 2:
             return {'is_dga': False, 'reasons': []}
-        
-        base = parts[-2]
-        
-        # Skip short domains (not enough data)
-        if len(base) < 8:
+
+        base = parts[-2].lower()
+        tld = parts[-1].lower() if len(parts) > 1 else ''
+
+        # Skip short domains (legitimate brands are often short)
+        # Real DGA domains are typically 8+ characters
+        if len(base) < 10:
             return {'is_dga': False, 'reasons': []}
-        
+
+        # Skip domains that contain recognizable words/patterns
+        # Common legitimate suffixes
+        legitimate_patterns = [
+            'js', 'api', 'cdn', 'app', 'web', 'dev', 'io', 'hub',
+            'lib', 'kit', 'box', 'lab', 'net', 'org', 'sys', 'tech',
+            'data', 'code', 'docs', 'blog', 'wiki', 'mail', 'chat',
+            'shop', 'store', 'cloud', 'host', 'server', 'service',
+            'select', 'sizzle', 'chart', 'graph', 'table', 'grid',
+            'form', 'input', 'button', 'modal', 'menu', 'nav',
+            'drop', 'drag', 'slide', 'scroll', 'zoom', 'animate',
+        ]
+
+        base_lower = base.lower()
+        for pattern in legitimate_patterns:
+            if pattern in base_lower:
+                return {'is_dga': False, 'reasons': []}
+
         reasons = []
         dga_score = 0
-        
-        # 1. Calculate entropy (randomness)
+
+        # 1. Check against known DGA regex patterns (highest confidence)
+        for pattern, description, score in self.dga_regex_patterns:
+            if re.match(pattern, base):
+                dga_score += score
+                reasons.append(f'Matches DGA pattern: {description}')
+                break  # Only count the strongest match
+
+        # 2. Calculate entropy (randomness) - only for longer domains
         entropy = self._calculate_entropy(base)
-        if entropy > self.dga_indicators['high_entropy']:
-            dga_score += 3
+        if len(base) >= 12 and entropy > 4.2:  # Higher threshold
+            dga_score += 2
             reasons.append(f'High entropy ({entropy:.2f}) indicates randomness')
-        
-        # 2. Check consonant/vowel ratio
+
+        # 3. Check consonant/vowel ratio - must be extreme
         consonants = sum(1 for c in base if c in 'bcdfghjklmnpqrstvwxyz')
         vowels = sum(1 for c in base if c in 'aeiou')
         total_letters = consonants + vowels
-        
+
         if total_letters > 0:
             consonant_ratio = consonants / total_letters
-            if consonant_ratio > self.dga_indicators['consonant_ratio']:
+            # Very strict: 80%+ consonants is suspicious
+            if consonant_ratio > 0.8:
                 dga_score += 2
-                reasons.append(f'Unusually high consonant ratio ({consonant_ratio:.2f})')
-        
-        # 3. Check digit ratio
+                reasons.append(f'Extremely high consonant ratio ({consonant_ratio:.2f})')
+
+        # 4. Check for NO vowels at all (very suspicious for 10+ char domains)
+        if vowels == 0 and len(base) >= 10:
+            dga_score += 3
+            reasons.append('No vowels in domain (highly suspicious)')
+
+        # 5. Check digit ratio - only suspicious if mostly digits
         digits = sum(1 for c in base if c.isdigit())
         if len(base) > 0:
             digit_ratio = digits / len(base)
-            if digit_ratio > self.dga_indicators['digit_ratio']:
+            # Only flag if >40% digits
+            if digit_ratio > 0.4:
                 dga_score += 2
                 reasons.append(f'High digit ratio ({digit_ratio:.2f})')
-        
-        # 4. Check for pronounceability (n-gram analysis)
-        if not self._is_pronounceable(base):
-            dga_score += 2
-            reasons.append('Domain is not pronounceable (unlikely to be human-generated)')
-        
-        # 5. Check for repeating patterns (often in DGA)
-        if self._has_repeating_patterns(base):
-            dga_score += 1
-            reasons.append('Contains repeating character patterns')
-        
-        # 6. Check for dictionary words
-        if not self._contains_dictionary_words(base):
-            dga_score += 1
-            reasons.append('No recognizable dictionary words')
-        
-        is_dga = dga_score >= 5
-        
+
+        # 6. Check for hex-like strings (common in DGA)
+        if re.match(r'^[a-f0-9]{12,}$', base):
+            dga_score += 3
+            reasons.append('Hexadecimal-like string (common in malware)')
+
+        # Require HIGH confidence for DGA classification
+        # Need score >= 6 (multiple strong indicators)
+        is_dga = dga_score >= 6
+
         return {
             'is_dga': is_dga,
             'reasons': reasons,
             'score': dga_score,
-            'entropy': entropy
+            'entropy': entropy if 'entropy' in dir() else self._calculate_entropy(base)
         }
     
     def _calculate_entropy(self, s):
