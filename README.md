@@ -116,7 +116,7 @@ Reports are saved to the `reports/` folder.
 
 ### Threat Campaign Attribution
 The analyzer cross-references extensions against:
-- Known malicious extension databases (DarkSpectre, ZoomStealer, CacheFlow, etc.)
+- Known malicious extension databases (Regularly updated to track all the latest extensions which were found to be malicious)
 - OSINT web searches across security research sites
 - Cached attribution from previous scans
 
