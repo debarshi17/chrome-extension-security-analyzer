@@ -672,11 +672,11 @@ class EnhancedStaticAnalyzer:
                 'technique': 'DOM surveillance'
             },
             {
-                'name': 'MutationObserver Credential Harvesting',
-                'pattern': r'MutationObserver[\s\S]{0,500}(password|login|signin|credential|card)',
-                'severity': 'critical',
-                'description': 'MutationObserver combined with credential-related keywords - actively watching for login/payment forms to appear',
-                'technique': 'Credential harvesting'
+                'name': 'MutationObserver Near Credential Keywords',
+                'pattern': r'MutationObserver[\s\S]{0,150}(password|credential|card[_-]?number|cvv)',
+                'severity': 'high',
+                'description': 'MutationObserver used near credential-related keywords. Could indicate DOM monitoring for login/payment forms, or legitimate form handling. Requires manual review.',
+                'technique': 'DOM monitoring near sensitive fields'
             },
             # ========== DOM SCRAPING & BULK EXTRACTION ==========
             {
@@ -790,18 +790,18 @@ class EnhancedStaticAnalyzer:
                 'technique': 'Navigation tracking'
             },
             {
-                'name': 'Login Page Detection',
-                'pattern': r'(login|signin|sign-in|auth|password)[\s\S]{0,100}(location|href|url|pathname)|location\.(href|pathname)[\s\S]{0,100}(login|signin|password)',
-                'severity': 'high',
-                'description': 'Detects login pages - extension activates credential theft only on authentication pages to avoid detection',
-                'technique': 'Login page targeting'
+                'name': 'Login Page URL Matching',
+                'pattern': r'(location\.href|window\.location|document\.URL|tabs\[\d\]\.url)\s*\.\s*(includes|match|indexOf|search|test)\s*\(\s*["\'/]*(login|signin|sign-in|accounts|auth)',
+                'severity': 'medium',
+                'description': 'Code checks if current page URL matches login/auth pages. May indicate page-targeted behavior - review what action is triggered.',
+                'technique': 'URL-conditional activation'
             },
             {
-                'name': 'Banking/Payment Page Detection',
-                'pattern': r'(bank|payment|checkout|paypal|stripe|card)[\s\S]{0,100}(location|href|url)|location[\s\S]{0,100}(bank|payment|checkout)',
-                'severity': 'critical',
-                'description': 'Detects banking/payment pages - extension targets financial pages for credential/card theft',
-                'technique': 'Financial page targeting'
+                'name': 'Financial Page URL Matching',
+                'pattern': r'(location\.href|window\.location|document\.URL)\s*\.\s*(includes|match|indexOf|search|test)\s*\(\s*["\'/]*(bank|payment|checkout|paypal)',
+                'severity': 'high',
+                'description': 'Code checks if current page URL matches banking/payment pages. May indicate page-targeted behavior. Verify what action is triggered on match.',
+                'technique': 'URL-conditional activation'
             },
             # ========== SERVICE WORKER ABUSE (MV3) ==========
             {
@@ -1158,6 +1158,15 @@ class EnhancedStaticAnalyzer:
         'polyfill',
         'core-js',
         'babel-polyfill',
+        'lit-html',
+        'lit-element',
+        'polymer',
+        'svelte',
+        'preact',
+        'ember',
+        'backbone',
+        'handlebars',
+        'htm.module',
     ]
 
     def _is_first_party_domain(self, context):
@@ -1227,10 +1236,40 @@ class EnhancedStaticAnalyzer:
             'vue.js',
             'angular',
             'core-js',
+            # lit-html / Polymer / LitElement
+            'the polymer project authors',
+            'polymer.github.io/patents',
+            'lit-html',
+            'lit-element',
+            '$lit$',
+            '{{lit-',
+            # Svelte / Preact / other frameworks
+            'svelte',
+            'copyright (c) jason miller',  # Preact
+            'preact',
+            'ember.js',
+            'backbone.js',
+            'handlebars.js',
         ]
 
         for sig in library_signatures:
             if sig in code_header:
+                return True
+
+        # For bundled/webpack files, framework signatures may appear deeper.
+        # Check the full content for highly distinctive markers that are
+        # unique enough to avoid false positives.
+        code_lower = code.lower() if len(code) > 2000 else code_header
+        bundled_signatures = [
+            'the polymer project authors',
+            'polymer.github.io/patents',
+            '$lit$',
+            '{{lit-',
+            'copyright (c) facebook',  # React in bundles
+            'copyright facebook, inc',
+        ]
+        for sig in bundled_signatures:
+            if sig in code_lower:
                 return True
 
         return False

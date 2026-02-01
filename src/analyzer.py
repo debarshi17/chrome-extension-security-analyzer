@@ -16,15 +16,20 @@ from virustotal_checker import VirusTotalChecker
 from pii_classifier import PIIClassifier
 from ioc_manager import IOCManager
 from advanced_detection import AdvancedDetector
-from cuckoo_sandbox import CuckooSandbox
 from store_metadata import StoreMetadata
 from threat_attribution import ThreatAttribution
 from false_positive_filter import FalsePositiveFilter
 from host_permissions_analyzer import HostPermissionsAnalyzer
 
+try:
+    from network_capture import NetworkCaptureAnalyzer
+    NETWORK_CAPTURE_AVAILABLE = True
+except ImportError:
+    NETWORK_CAPTURE_AVAILABLE = False
+
 class ChromeExtensionAnalyzer:
     """Main analyzer orchestrator with professional-grade analysis"""
-    
+
     def __init__(self):
         self.downloader = ExtensionDownloader()
         self.unpacker = ExtensionUnpacker()
@@ -35,11 +40,11 @@ class ChromeExtensionAnalyzer:
         self.pii_classifier = PIIClassifier()
         self.ioc_manager = IOCManager()
         self.advanced_detector = AdvancedDetector()
-        self.cuckoo = CuckooSandbox()
         self.store_metadata = StoreMetadata()
         self.threat_attribution = ThreatAttribution()
         self.false_positive_filter = FalsePositiveFilter()
         self.host_permissions_analyzer = HostPermissionsAnalyzer()
+        self.network_capture = NetworkCaptureAnalyzer() if NETWORK_CAPTURE_AVAILABLE else None
     
     def analyze_extension(self, extension_id):
         """
@@ -142,7 +147,18 @@ class ChromeExtensionAnalyzer:
         # Add store metadata and host permissions to results
         results['store_metadata'] = store_metadata
         results['host_permissions'] = host_permissions
-        
+
+        # Apply false positive filtering to malicious pattern detections
+        raw_patterns = results.get('malicious_patterns', [])
+        if raw_patterns:
+            # Detect Firebase usage to provide context
+            uses_firebase = self._detect_firebase_usage(results)
+            fp_context = {'uses_firebase': uses_firebase}
+            fp_result = self.false_positive_filter.filter_malicious_patterns(raw_patterns, context=fp_context)
+            results['malicious_patterns'] = fp_result['filtered_patterns']
+            if fp_result['suppression_count'] > 0:
+                print(f"[i] Suppressed {fp_result['suppression_count']} false positive pattern(s)")
+
         # Step 4: Domain Intelligence Analysis
         print("\n[DOMAIN] STEP 4: Domain intelligence analysis...")
         print("-" * 80)
@@ -170,36 +186,93 @@ class ChromeExtensionAnalyzer:
 
         print(f"\n[+] Updated Risk Score (with VirusTotal): {results['risk_score']:.1f}/10 ({results['risk_level']})")
 
-        # Step 5.5: Dynamic Analysis with Cuckoo Sandbox
-        print("\n[CUCKOO] STEP 5.5: Dynamic analysis (Cuckoo Sandbox)...")
-        print("-" * 80)
-        dynamic_evidence = self._run_cuckoo_analysis(extension_dir, extension_id)
+        # Step 5.5: Dynamic Network Capture (optional, --dynamic flag)
+        if getattr(self, 'run_dynamic', False) and self.network_capture:
+            print("\n[NETWORK] STEP 5.5: Dynamic network capture analysis...")
+            print("-" * 80)
 
-        if dynamic_evidence and dynamic_evidence.get('available'):
-            print(f"[+] Dynamic analysis complete: {dynamic_evidence.get('verdict', 'Unknown')}")
-            print(f"    Risk Score: {dynamic_evidence.get('dynamic_risk_score', 0)}/10")
+            # Extract domains from host_permissions and content_scripts
+            hp_domains = []
+            hp_data = results.get('host_permissions', {})
+            if isinstance(hp_data, dict):
+                for entry in hp_data.get('host_permissions', []):
+                    host = entry.get('host', '')
+                    if host:
+                        hp_domains.append(host)
+                for cs in hp_data.get('content_scripts', []):
+                    for match in cs.get('matches', []):
+                        # Parse match patterns like *://*.zoom.us/*
+                        try:
+                            from urllib.parse import urlparse
+                            # Strip scheme wildcards for parsing
+                            clean = match.replace('*://', 'https://').replace('/*', '/')
+                            parsed = urlparse(clean)
+                            if parsed.netloc:
+                                hp_domains.append(parsed.netloc)
+                        except Exception:
+                            pass
 
-            if dynamic_evidence.get('malicious_indicators'):
-                print(f"[!] {len(dynamic_evidence['malicious_indicators'])} malicious behavior(s) detected:")
-                for indicator in dynamic_evidence['malicious_indicators'][:3]:
-                    print(f"    • {indicator.get('description', 'Unknown')}")
+            network_results = self.network_capture.analyze(
+                extension_dir=str(extension_dir),
+                extension_id=extension_id,
+                timeout=getattr(self, 'dynamic_timeout', 30),
+                host_permission_domains=hp_domains
+            )
+            results['network_capture'] = network_results
 
-            # Update risk score based on dynamic analysis
-            dynamic_risk = dynamic_evidence.get('dynamic_risk_score', 0)
-            if dynamic_risk >= 8:
-                results['risk_score'] = min(10.0, results['risk_score'] + 2.5)
-            elif dynamic_risk >= 5:
-                results['risk_score'] = min(10.0, results['risk_score'] + 1.5)
+            if network_results.get('available'):
+                summary = network_results.get('summary', {})
+                verdict = network_results.get('verdict', 'CLEAN')
+                print(f"[+] Captured {summary.get('total_requests', 0)} total requests")
+                print(f"[+] Extension-initiated: {summary.get('extension_requests', 0)}")
+                print(f"[+] Scored suspicious: {summary.get('suspicious_count', 0)} "
+                      f"(high-score: {summary.get('high_score_count', 0)})")
 
-            results['dynamic_analysis'] = dynamic_evidence
+                if summary.get('beaconing_detected'):
+                    beacons = network_results.get('beaconing', [])
+                    print(f"[!] BEACONING: {len(beacons)} endpoint(s) hit repeatedly (C2 indicator)")
+
+                if summary.get('post_nav_exfil_detected'):
+                    pn = network_results.get('post_nav_exfil', [])
+                    print(f"[!] POST-NAV EXFIL: {len(pn)} request(s) fired within 3s of navigation")
+
+                if summary.get('websocket_suspicious', 0) > 0:
+                    print(f"[!] WEBSOCKET: {summary['websocket_suspicious']} suspicious WebSocket connection(s)")
+
+                # Risk score adjustments based on aggregated verdict
+                if verdict == 'MALICIOUS':
+                    print(f"[!] VERDICT: MALICIOUS - multiple converging threat signals detected!")
+                    results['risk_score'] = min(10.0, results['risk_score'] + 4.0)
+                elif verdict == 'SUSPICIOUS':
+                    print(f"[!] VERDICT: SUSPICIOUS - threat signals detected, review recommended")
+                    results['risk_score'] = min(10.0, results['risk_score'] + 2.0)
+                elif verdict == 'LOW_RISK':
+                    print(f"[+] VERDICT: LOW_RISK - minor signals, likely benign")
+                else:
+                    print(f"[+] VERDICT: CLEAN - no suspicious network behavior observed")
+
+                # Feed newly discovered domains into VT
+                new_domains = network_results.get('new_domains', [])
+                if new_domains and not getattr(self, 'skip_vt', False):
+                    print(f"[+] Checking {len(new_domains)} runtime-discovered domain(s) against VirusTotal...")
+                    new_vt = self.vt_checker.check_multiple_domains(new_domains, max_checks=5)
+                    vt_results.extend(new_vt)
+                    results = self.analyzer.update_risk_with_virustotal(results, new_vt)
+            else:
+                error = network_results.get('error', 'Unknown error')
+                print(f"[i] Dynamic analysis unavailable: {error}")
+        elif getattr(self, 'run_dynamic', False) and not self.network_capture:
+            print("\n[NETWORK] STEP 5.5: Dynamic network capture analysis...")
+            print("-" * 80)
+            print("[i] Network capture module not available. Install: pip install playwright && playwright install chromium")
+            results['network_capture'] = {'available': False, 'skipped': True}
         else:
-            print("[i] Cuckoo Sandbox not available or disabled")
-            dynamic_evidence = None
+            results['network_capture'] = {'available': False, 'skipped': True}
 
-        # Step 6: Advanced Malware Detection (with dynamic evidence)
+        # Step 6: Advanced Malware Detection
         print("\n[ADVANCED] STEP 6: Advanced malware detection...")
         print("-" * 80)
-        advanced_findings = self.advanced_detector.run_all_detections(extension_dir, dynamic_evidence=dynamic_evidence)
+        advanced_findings = self.advanced_detector.run_all_detections(extension_dir)
         results['advanced_detection'] = advanced_findings
 
         # Update risk score based on advanced detection
@@ -333,6 +406,11 @@ class ChromeExtensionAnalyzer:
     def _check_virustotal(self, results):
         """Check all domains against VirusTotal"""
         
+        # Skip VirusTotal checks if requested
+        if getattr(self, 'skip_vt', False):
+            print("[i] Skipping VirusTotal checks (--skip-vt enabled)")
+            return []
+
         # Extract unique domains from external scripts
         external_scripts = results.get('external_scripts', [])
         unique_domains = set()
@@ -453,6 +531,19 @@ class ChromeExtensionAnalyzer:
         print(f"   • VirusTotal Malicious: {len(malicious_domains)}")
         print(f"   • Advanced Techniques: {advanced.get('critical_findings', 0)} critical, {advanced.get('high_findings', 0)} high")
         print(f"   • PII Data Types: {pii.get('data_types_count', 0)} ({pii.get('overall_risk', 'NONE')} risk)")
+
+        network = results.get('network_capture', {})
+        if network.get('available'):
+            net_sum = network.get('summary', {})
+            print(f"   • Dynamic Requests: {net_sum.get('extension_requests', 0)} extension-initiated")
+            print(f"   • Scored Suspicious: {net_sum.get('suspicious_count', 0)} "
+                  f"(high-score: {net_sum.get('high_score_count', 0)})")
+            if net_sum.get('beaconing_detected'):
+                print(f"   • Beaconing: DETECTED")
+            if net_sum.get('post_nav_exfil_detected'):
+                print(f"   • Post-Navigation Exfil: DETECTED")
+            print(f"   • Network Verdict: {net_sum.get('verdict', 'N/A')}")
+
     def _print_verdict(self, results):
         """Print final verdict"""
 
@@ -630,16 +721,20 @@ class ChromeExtensionAnalyzer:
         stats = self.ioc_manager.get_statistics()
         print(f"[IOC] Database now contains {stats['total_domains']} domains, {stats['total_extensions']} extensions")
 
-    def _run_cuckoo_analysis(self, extension_dir, extension_id):
-        """Run dynamic analysis with Cuckoo Sandbox"""
-        try:
-            # Submit extension to Cuckoo for analysis
-            result = self.cuckoo.submit_extension(extension_dir, extension_id, timeout=300)
-            return result
-        except Exception as e:
-            # Cuckoo might not be available - that's OK
-            print(f"[i] Cuckoo analysis skipped: {str(e)}")
-            return None
+    def _detect_firebase_usage(self, results):
+        """Check if extension uses Firebase as its backend"""
+        external_scripts = results.get('external_scripts', [])
+        for script in external_scripts:
+            url = (script.get('url') or '').lower()
+            if 'firebaseio.com' in url or 'firebaseapp.com' in url or 'firebase' in url:
+                return True
+        # Also check code patterns for firebase imports
+        patterns = results.get('malicious_patterns', [])
+        for p in patterns:
+            evidence = (p.get('evidence') or '').lower()
+            if 'firebase' in evidence:
+                return True
+        return False
 
     def _check_threat_attribution(self, extension_id, extension_name):
         """Check if extension mentioned in known threat campaigns"""
@@ -652,9 +747,8 @@ class ChromeExtensionAnalyzer:
             return None
 
 
-def main():
-    """CLI entry point"""
-    
+def parse_cli_args(argv=None):
+    """Parse CLI arguments (exposed for tests). Accepts optional argv list."""
     parser = argparse.ArgumentParser(
         description='Professional Chrome Extension Security Analyzer with VirusTotal',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -668,7 +762,6 @@ Examples:
   
 Features:
   [OK] Chrome Web Store metadata collection
-  [OK] Cuckoo Sandbox dynamic analysis
   [OK] False positive suppression (Firebase, jQuery, CDNs)
   [OK] Threat campaign attribution via web search
   [OK] VirusTotal domain reputation checking
@@ -677,12 +770,13 @@ Features:
   [OK] Professional threat intelligence reports
   [OK] PII/data classification analysis
   [OK] Advanced malware detection (CSP manipulation, DOM injection, etc.)
+  [OK] Dynamic network capture via Playwright + CDP (--dynamic flag)
   [OK] IOC database management
   [OK] Permission combination risk analysis
   [OK] 64+ malicious code pattern detection
         """
     )
-    
+
     parser.add_argument(
         'extension_id',
         help='Chrome extension ID (32-character string from Chrome Web Store URL)'
@@ -693,9 +787,41 @@ Features:
         default='reports',
         help='Output directory for reports (default: reports/)'
     )
-    
-    args = parser.parse_args()
-    
+
+    parser.add_argument(
+        '--skip-vt',
+        action='store_true',
+        help='Skip VirusTotal checks (useful for offline debugging)'
+    )
+
+    parser.add_argument(
+        '--fast',
+        action='store_true',
+        help='Enable fast mode (skip VirusTotal checks)'
+    )
+
+    parser.add_argument(
+        '--dynamic',
+        action='store_true',
+        help='Enable dynamic network capture analysis (requires playwright)'
+    )
+
+    parser.add_argument(
+        '--dynamic-timeout',
+        type=int,
+        default=30,
+        help='Timeout in seconds for dynamic analysis (default: 30)'
+    )
+
+    return parser.parse_args(argv)
+
+
+def main():
+    """CLI entry point"""
+
+    # Use centralized parser (tests and CLI both use this)
+    args = parse_cli_args()
+
     # Validate extension ID format
     if len(args.extension_id) != 32:
         print(f"[!] Warning: Extension ID should be 32 characters long.")
@@ -704,7 +830,7 @@ Features:
         if response.lower() != 'y':
             print("[[X]] Aborted.")
             sys.exit(1)
-    
+
     # Run analysis
     print("""
     ========================================================================
@@ -712,8 +838,14 @@ Features:
        Threat Intelligence Platform with VirusTotal Integration
     ========================================================================
     """)
-    
+
     analyzer = ChromeExtensionAnalyzer()
+    # Honor CLI options for skipping external services - support --fast shortcut
+    fast_mode = getattr(args, 'fast', False)
+    analyzer.skip_vt = getattr(args, 'skip_vt', False) or fast_mode
+    analyzer.run_dynamic = getattr(args, 'dynamic', False) and not fast_mode
+    analyzer.dynamic_timeout = getattr(args, 'dynamic_timeout', 30)
+
     results = analyzer.analyze_extension(args.extension_id)
     
     if results:

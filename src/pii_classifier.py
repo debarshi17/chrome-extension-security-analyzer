@@ -38,7 +38,7 @@ class PIIClassifier:
             'impact': 'Direct financial loss and potential identity fraud'
         },
         'PERSONAL_INFO': {
-            'chrome_apis': ['history', 'tabs', 'cookies', 'identity'],
+            'chrome_apis': ['history', 'cookies', 'identity'],
             'patterns': [
                 r'email', r'e-mail', r'address', r'phone', r'mobile',
                 r'ssn', r'social[_-]?security', r'full[_-]?name', r'first[_-]?name',
@@ -74,7 +74,7 @@ class PIIClassifier:
             'impact': 'Attacker can impersonate user without credentials'
         },
         'EMAIL_CONTENT': {
-            'chrome_apis': ['tabs', 'webRequest'],
+            'chrome_apis': ['webRequest'],
             'patterns': [
                 r'email[_-]?content', r'message[_-]?body', r'subject',
                 r'sender', r'recipient', r'inbox', r'draft',
@@ -86,7 +86,7 @@ class PIIClassifier:
             'impact': 'Sensitive communications exposed'
         },
         'FORM_DATA': {
-            'chrome_apis': ['webRequest', 'tabs'],
+            'chrome_apis': ['webRequest'],
             'patterns': [
                 r'form[_-]?data', r'input[_-]?field', r'textarea',
                 r'form[_-]?submission', r'post[_-]?data', r'user[_-]?input',

@@ -4,13 +4,6 @@
         "rate_limit_delay": 15,
         "comment": "Get your free API key at: https://www.virustotal.com/gui/join-us"
     },
-    "cuckoo": {
-        "api_url": "http://localhost:8090",
-        "api_key": null,
-        "enabled": false,
-        "timeout": 300,
-        "comment": "Cuckoo Sandbox for dynamic analysis. Install from: https://cuckoo.sh/"
-    },
     "google_custom_search": {
         "api_key": null,
         "cx_id": null,

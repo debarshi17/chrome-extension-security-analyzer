@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse
 import json
+import html as html_module  # For escaping permission strings that contain angle brackets like <all_urls>
 
 class ProfessionalReportGenerator:
     """Generates professional threat intelligence reports"""
@@ -879,6 +880,11 @@ class ProfessionalReportGenerator:
         if vt_results:
             html += self._generate_virustotal_section(vt_results)
 
+        # Dynamic Network Capture
+        network_capture = results.get('network_capture', {})
+        if network_capture.get('available'):
+            html += self._generate_network_capture_section(network_capture)
+
         # Advanced Malware Detection (NEW)
         advanced_detection = results.get('advanced_detection')
         if advanced_detection:
@@ -1320,7 +1326,241 @@ class ProfessionalReportGenerator:
         </div>
 """
         return html
-    
+
+    def _generate_network_capture_section(self, network_data):
+        """Generate dynamic network capture analysis section with scoring engine results"""
+
+        if not network_data or not network_data.get('available'):
+            return ""
+
+        summary = network_data.get('summary', {})
+        extension_reqs = network_data.get('extension_requests', [])
+        suspicious = network_data.get('suspicious_connections', [])
+        beaconing = network_data.get('beaconing', [])
+        post_nav = network_data.get('post_nav_exfil', [])
+        ws_conns = network_data.get('websocket_connections', [])
+        verdict = network_data.get('verdict', 'CLEAN')
+
+        # Verdict color/label mapping
+        verdict_styles = {
+            'MALICIOUS': ('#ef4444', 'rgba(239, 68, 68, 0.15)', 'Multiple converging threat signals detected'),
+            'SUSPICIOUS': ('#f97316', 'rgba(249, 115, 22, 0.15)', 'Threat signals detected - manual review recommended'),
+            'LOW_RISK': ('#eab308', 'rgba(234, 179, 8, 0.15)', 'Minor signals observed - likely benign'),
+            'CLEAN': ('#22c55e', 'rgba(34, 197, 94, 0.15)', 'No suspicious network behavior observed'),
+        }
+        v_color, v_bg, v_desc = verdict_styles.get(verdict, ('#94a3b8', 'rgba(148,163,184,0.15)', ''))
+
+        html = """
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">&#x1F4E1;</div>
+                <div class="section-title">Dynamic Network Analysis</div>
+            </div>
+            <p style="color: #94a3b8; margin-bottom: 20px;">
+                Runtime network traffic captured via Playwright + Chrome DevTools Protocol.
+                Requests are scored individually and aggregated into a verdict.
+                Single hits do not trigger alerts &mdash; patterns do.
+            </p>
+"""
+
+        # Verdict banner
+        html += f"""
+            <div style="background: {v_bg}; border: 1px solid {v_color}; border-radius: 8px; padding: 18px 20px; margin-bottom: 25px; display: flex; align-items: center; gap: 15px;">
+                <span style="background: {v_color}; color: #fff; padding: 4px 14px; border-radius: 4px; font-size: 14px; font-weight: 800; letter-spacing: 1px;">{verdict}</span>
+                <span style="color: #e2e8f0; font-size: 14px;">{v_desc}</span>
+            </div>
+"""
+
+        # Summary stat boxes (6 columns now)
+        html += f"""
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 25px;">
+                <div style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 8px; padding: 15px; text-align: center;">
+                    <div style="font-size: 28px; font-weight: 700; color: #60a5fa;">{summary.get('total_requests', 0)}</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Total Requests</div>
+                </div>
+                <div style="background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 8px; padding: 15px; text-align: center;">
+                    <div style="font-size: 28px; font-weight: 700; color: #4ade80;">{summary.get('extension_requests', 0)}</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Extension-Initiated</div>
+                </div>
+                <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 8px; padding: 15px; text-align: center;">
+                    <div style="font-size: 28px; font-weight: 700; color: #f87171;">{summary.get('suspicious_count', 0)}</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Scored Suspicious</div>
+                </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 25px;">
+                <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px; padding: 15px; text-align: center;">
+                    <div style="font-size: 28px; font-weight: 700; color: #fca5a5;">{summary.get('high_score_count', 0)}</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">High-Score Hits</div>
+                </div>
+                <div style="background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); border-radius: 8px; padding: 15px; text-align: center;">
+                    <div style="font-size: 28px; font-weight: 700; color: #c084fc;">{summary.get('websocket_count', 0)}</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">WebSocket Conns</div>
+                </div>
+                <div style="background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 8px; padding: 15px; text-align: center;">
+                    <div style="font-size: 28px; font-weight: 700; color: #fbbf24;">{len(beaconing)}</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Beaconing Endpoints</div>
+                </div>
+            </div>
+"""
+
+        # Beaconing detections
+        if beaconing:
+            html += """
+            <h3 style="color: #fbbf24; margin-bottom: 15px; font-size: 18px; font-weight: 700;">Beaconing Detection</h3>
+            <p style="color: #94a3b8; font-size: 13px; margin-bottom: 12px;">
+                Endpoints hit repeatedly by the extension. Regular intervals suggest C2 heartbeating or telemetry exfil.
+            </p>
+"""
+            for b in beaconing:
+                sev_color = '#ef4444' if b.get('severity') == 'HIGH' else '#f97316'
+                html += f"""
+            <div style="background: rgba(251, 191, 36, 0.08); border-left: 4px solid {sev_color}; border-radius: 6px; padding: 15px; margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="color: #e2e8f0; font-weight: 600; font-size: 14px; word-break: break-all;">{html_module.escape(b.get('endpoint', ''))}</span>
+                    <span style="background: {sev_color}; color: #fff; padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; white-space: nowrap; margin-left: 10px;">{b.get('severity', 'MEDIUM')}</span>
+                </div>
+                <div style="color: #fbbf24; font-size: 13px;">{html_module.escape(b.get('reason', ''))}</div>
+            </div>
+"""
+
+        # Post-navigation exfil
+        if post_nav:
+            html += """
+            <h3 style="color: #fb923c; margin: 25px 0 15px 0; font-size: 18px; font-weight: 700;">Post-Navigation Exfiltration</h3>
+            <p style="color: #94a3b8; font-size: 13px; margin-bottom: 12px;">
+                Suspicious requests fired within 3 seconds of a page navigation. Malicious extensions
+                commonly exfiltrate data immediately after a page loads.
+            </p>
+"""
+            for pn in post_nav:
+                sev_color = '#ef4444' if pn.get('severity') == 'HIGH' else '#f97316'
+                reasons_html = ''.join(
+                    f'<li style="margin-bottom: 4px;">{html_module.escape(r)}</li>'
+                    for r in pn.get('reasons', [])
+                )
+                html += f"""
+            <div style="background: rgba(251, 146, 60, 0.08); border-left: 4px solid {sev_color}; border-radius: 6px; padding: 15px; margin-bottom: 10px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="color: #e2e8f0; font-weight: 600; font-size: 14px; word-break: break-all;">{html_module.escape(pn.get('method', 'GET'))} {html_module.escape(pn.get('url', ''))}</span>
+                    <span style="background: {sev_color}; color: #fff; padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; white-space: nowrap; margin-left: 10px;">Score: {pn.get('score', 0)}</span>
+                </div>
+                <div style="color: #fb923c; font-size: 13px; margin-bottom: 4px;">Fired {pn.get('seconds_after_navigation', 0)}s after navigation</div>
+                <ul style="color: #fbbf24; font-size: 13px; margin: 0; padding-left: 20px;">
+                    {reasons_html}
+                </ul>
+            </div>
+"""
+
+        # Scored suspicious connections
+        if suspicious:
+            html += """
+            <h3 style="color: #f87171; margin: 25px 0 15px 0; font-size: 18px; font-weight: 700;">Scored Suspicious Connections</h3>
+            <p style="color: #94a3b8; font-size: 13px; margin-bottom: 12px;">
+                Each request is scored based on routing indicators, payload analysis, and behavioral signals.
+                Score &ge;4 = flagged, &ge;7 = high-confidence threat signal.
+            </p>
+"""
+            for conn in suspicious:
+                severity = conn.get('severity', 'MEDIUM')
+                score = conn.get('score', 0)
+                sev_color = '#ef4444' if severity == 'CRITICAL' else ('#f97316' if severity == 'HIGH' else '#eab308')
+                reasons_html = ''.join(
+                    f'<li style="margin-bottom: 4px;">{html_module.escape(r)}</li>'
+                    for r in conn.get('reasons', [])
+                )
+                post_preview = ''
+                if conn.get('post_data_preview'):
+                    escaped_data = html_module.escape(conn['post_data_preview'])
+                    post_preview = f"""
+                    <div style="margin-top: 10px;">
+                        <strong style="color: #e2e8f0;">POST Body Preview:</strong>
+                        <pre style="background: rgba(0,0,0,0.3); color: #93c5fd; padding: 10px; border-radius: 4px; font-size: 12px; overflow-x: auto; margin-top: 5px; white-space: pre-wrap; word-break: break-all;">{escaped_data}</pre>
+                    </div>"""
+
+                html += f"""
+            <div style="background: rgba(255,255,255,0.03); border-left: 4px solid {sev_color}; border-radius: 6px; padding: 15px; margin-bottom: 12px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="color: #e2e8f0; font-weight: 600; font-size: 14px; word-break: break-all;">{html_module.escape(conn.get('method', 'GET'))} {html_module.escape(conn.get('url', ''))}</span>
+                    <div style="display: flex; gap: 6px; flex-shrink: 0; margin-left: 10px;">
+                        <span style="background: {sev_color}; color: #fff; padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 700;">{severity}</span>
+                        <span style="background: rgba(255,255,255,0.1); color: #e2e8f0; padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 700;">Score: {score}</span>
+                    </div>
+                </div>
+                <ul style="color: #fbbf24; font-size: 13px; margin: 0; padding-left: 20px;">
+                    {reasons_html}
+                </ul>
+                {post_preview}
+            </div>
+"""
+
+        # Extension requests table
+        if extension_reqs:
+            external_reqs = [r for r in extension_reqs if not r.get('url', '').startswith('chrome-extension://')]
+            if external_reqs:
+                html += f"""
+            <h3 style="color: #60a5fa; margin: 25px 0 15px 0; font-size: 18px; font-weight: 700;">Extension Network Requests ({len(external_reqs)} external)</h3>
+            <div style="max-height: 400px; overflow-y: auto; border: 1px solid #475569; border-radius: 8px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                    <thead>
+                        <tr style="background: rgba(255,255,255,0.05); position: sticky; top: 0;">
+                            <th style="padding: 10px 12px; text-align: left; color: #94a3b8; border-bottom: 1px solid #475569;">Method</th>
+                            <th style="padding: 10px 12px; text-align: left; color: #94a3b8; border-bottom: 1px solid #475569;">URL</th>
+                            <th style="padding: 10px 12px; text-align: left; color: #94a3b8; border-bottom: 1px solid #475569;">Type</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+"""
+                for i, req in enumerate(external_reqs[:50]):
+                    bg = 'rgba(255,255,255,0.02)' if i % 2 == 0 else 'transparent'
+                    method = html_module.escape(req.get('method', 'GET'))
+                    url = html_module.escape(req.get('url', '')[:120])
+                    rtype = html_module.escape(req.get('resource_type', ''))
+                    method_color = '#f87171' if method == 'POST' else '#e2e8f0'
+                    html += f"""
+                        <tr style="background: {bg};">
+                            <td style="padding: 8px 12px; color: {method_color}; font-weight: 600; border-bottom: 1px solid rgba(71,85,105,0.3);">{method}</td>
+                            <td style="padding: 8px 12px; color: #e2e8f0; border-bottom: 1px solid rgba(71,85,105,0.3); word-break: break-all;">{url}</td>
+                            <td style="padding: 8px 12px; color: #94a3b8; border-bottom: 1px solid rgba(71,85,105,0.3);">{rtype}</td>
+                        </tr>
+"""
+                if len(external_reqs) > 50:
+                    html += f"""
+                        <tr><td colspan="3" style="padding: 10px 12px; color: #94a3b8; text-align: center;">... and {len(external_reqs) - 50} more requests</td></tr>
+"""
+                html += """
+                    </tbody>
+                </table>
+            </div>
+"""
+
+        # WebSocket connections
+        if ws_conns:
+            html += f"""
+            <h3 style="color: #c084fc; margin: 25px 0 15px 0; font-size: 18px; font-weight: 700;">WebSocket Connections ({len(ws_conns)})</h3>
+"""
+            for ws in ws_conns:
+                ws_url = html_module.escape(ws.get('url', ''))
+                frames_sent = len(ws.get('frames_sent', []))
+                frames_recv = len(ws.get('frames_received', []))
+                html += f"""
+            <div style="background: rgba(168, 85, 247, 0.1); border-left: 4px solid #a855f7; border-radius: 6px; padding: 15px; margin-bottom: 10px;">
+                <div style="color: #e2e8f0; font-weight: 600; word-break: break-all; margin-bottom: 8px;">{ws_url}</div>
+                <div style="color: #94a3b8; font-size: 13px;">Frames sent: {frames_sent} | Frames received: {frames_recv}</div>
+            </div>
+"""
+
+        # Duration note
+        duration = summary.get('duration_seconds', 0)
+        hp_pages = summary.get('host_permission_pages', 0)
+        hp_note = f" | Host permission pages: {hp_pages}" if hp_pages else ""
+        html += f"""
+            <p style="color: #64748b; font-size: 12px; margin-top: 20px; text-align: right;">
+                Capture duration: {duration}s | Trigger pages: {summary.get('trigger_pages_loaded', 0)}{hp_note}
+            </p>
+        </div>
+"""
+        return html
+
     def _generate_domain_intelligence_section(self, domain_intel):
         """Generate domain intelligence section"""
         
@@ -1444,7 +1684,9 @@ class ProfessionalReportGenerator:
                     'MEDIUM': ('#f59e0b', 'rgba(245, 158, 11, 0.15)', '#fcd34d')
                 }
                 border_color, bg_color, text_color = sev_colors.get(severity, sev_colors['MEDIUM'])
-                perms_list = ' + '.join(warning.get('permissions', []))
+                perms_raw = ' + '.join(warning.get('permissions', []))
+                # Escape HTML so values like <all_urls> render literally, not as tags
+                perms_list = html_module.escape(perms_raw)
 
                 html += f'''
                     <div style="background: {bg_color}; border-left: 4px solid {border_color}; padding: 15px; border-radius: 6px;">
@@ -2150,25 +2392,25 @@ class ProfessionalReportGenerator:
 
         # Statistics summary
         html += f"""
-                <div class="finding-card">
-                    <h3>Permission Scope: {perm_scope}</h3>
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid #475569; border-radius: 8px; padding: 20px; margin-bottom: 15px;">
+                    <h3 style="color: #e2e8f0; margin: 0 0 10px 0;">Permission Scope: {perm_scope}</h3>
                     <p style="color: {risk_color}; font-weight: 700; font-size: 18px; margin: 10px 0;">Risk Level: {risk_level}</p>
                     <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin: 15px 0;">
                         <div>
-                            <p style="font-size: 12px; color: #64748b; margin: 0;">Host Permissions</p>
-                            <p style="font-size: 24px; font-weight: 700; margin: 5px 0;">{stats['total_host_permissions']}</p>
+                            <p style="font-size: 12px; color: #94a3b8; margin: 0;">Host Permissions</p>
+                            <p style="font-size: 24px; font-weight: 700; color: #e2e8f0; margin: 5px 0;">{stats['total_host_permissions']}</p>
                         </div>
                         <div>
-                            <p style="font-size: 12px; color: #64748b; margin: 0;">Content Scripts</p>
-                            <p style="font-size: 24px; font-weight: 700; margin: 5px 0;">{stats['total_content_scripts']}</p>
+                            <p style="font-size: 12px; color: #94a3b8; margin: 0;">Content Scripts</p>
+                            <p style="font-size: 24px; font-weight: 700; color: #e2e8f0; margin: 5px 0;">{stats['total_content_scripts']}</p>
                         </div>
                         <div>
-                            <p style="font-size: 12px; color: #64748b; margin: 0;">Sensitive Categories</p>
-                            <p style="font-size: 24px; font-weight: 700; margin: 5px 0;">{stats['total_sensitive_categories']}</p>
+                            <p style="font-size: 12px; color: #94a3b8; margin: 0;">Sensitive Categories</p>
+                            <p style="font-size: 24px; font-weight: 700; color: #e2e8f0; margin: 5px 0;">{stats['total_sensitive_categories']}</p>
                         </div>
                         <div>
-                            <p style="font-size: 12px; color: #64748b; margin: 0;">Sensitive Domains</p>
-                            <p style="font-size: 24px; font-weight: 700; margin: 5px 0;">{stats['total_sensitive_domains']}</p>
+                            <p style="font-size: 12px; color: #94a3b8; margin: 0;">Sensitive Domains</p>
+                            <p style="font-size: 24px; font-weight: 700; color: #e2e8f0; margin: 5px 0;">{stats['total_sensitive_domains']}</p>
                         </div>
                     </div>
                 </div>
@@ -2177,33 +2419,33 @@ class ProfessionalReportGenerator:
         # Risk factors
         if risk.get('risk_factors'):
             html += """
-                <h3 style="margin-top: 25px;">Risk Factors</h3>
-                <div class="finding-card">
+                <h3 style="margin-top: 25px; color: #e2e8f0;">Risk Factors</h3>
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid #475569; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
 """
             for factor in risk['risk_factors']:
-                html += f'<p style="margin: 8px 0; font-size: 13px;">⚠️ {factor}</p>'
+                html += f'<p style="margin: 8px 0; font-size: 13px; color: #fbbf24;">[!] {factor}</p>'
 
             html += "</div>"
 
         # Sensitive access breakdown
         if sensitive_access:
             html += """
-                <h3 style="margin-top: 25px;">Sensitive Website Access</h3>
-                <p style="font-size: 13px; color: #64748b; margin: 10px 0;">Extension requests permission to access the following sensitive categories:</p>
+                <h3 style="margin-top: 25px; color: #e2e8f0;">Sensitive Website Access</h3>
+                <p style="font-size: 13px; color: #94a3b8; margin: 10px 0;">Extension requests permission to access the following sensitive categories:</p>
 """
 
             for category, domains in sensitive_access.items():
                 category_name = category.replace('_', ' ').title()
                 html += f"""
-                <div class="finding-card" style="margin: 15px 0;">
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid #475569; border-radius: 8px; padding: 15px; margin: 15px 0;">
                     <h4 style="color: {risk_color}; margin: 0 0 10px 0;">{category_name} ({len(domains)} domains)</h4>
                     <div style="max-height: 150px; overflow-y: auto;">
 """
                 for domain in domains[:10]:
-                    html += f'<code style="display: block; margin: 3px 0; padding: 6px; background: #f1f5f9; border-radius: 4px; font-size: 12px;">{domain}</code>'
+                    html += f'<code style="display: block; margin: 3px 0; padding: 6px; background: rgba(59, 130, 246, 0.1); color: #93c5fd; border-radius: 4px; font-size: 12px;">{domain}</code>'
 
                 if len(domains) > 10:
-                    html += f'<p style="margin: 10px 0; font-size: 12px; color: #64748b;">... and {len(domains) - 10} more</p>'
+                    html += f'<p style="margin: 10px 0; font-size: 12px; color: #94a3b8;">... and {len(domains) - 10} more</p>'
 
                 html += """
                     </div>
@@ -2216,9 +2458,9 @@ class ProfessionalReportGenerator:
         display_count = min(total_host_perms, 10)
 
         html += f"""
-                <h3 style="margin-top: 25px;">Sample Host Permissions</h3>
-                <p style="font-size: 13px; color: #64748b; margin: 10px 0;">Showing {display_count} of {total_host_perms} host permission(s) requested by this extension:</p>
-                <div class="finding-card">
+                <h3 style="margin-top: 25px; color: #e2e8f0;">Sample Host Permissions</h3>
+                <p style="font-size: 13px; color: #94a3b8; margin: 10px 0;">Showing {display_count} of {total_host_perms} host permission(s) requested by this extension:</p>
+                <div style="background: rgba(255,255,255,0.03); border: 1px solid #475569; border-radius: 8px; padding: 15px;">
 """
 
         for i, perm in enumerate(host_perms_list[:10], 1):
@@ -2231,10 +2473,10 @@ class ProfessionalReportGenerator:
             }.get(perm_risk, '#64748b')
 
             html += f"""
-                <div style="border-left: 3px solid {perm_color}; padding: 10px; margin: 10px 0; background: #f8fafc;">
-                    <p style="margin: 0; font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700;">{perm['pattern']}</p>
-                    <p style="margin: 5px 0 0 0; font-size: 12px; color: #64748b;">{perm['description']}</p>
-                    <p style="margin: 5px 0 0 0; font-size: 11px;"><span style="color: {perm_color}; font-weight: 700;">Risk: {perm_risk}</span> | Category: {perm['category']}</p>
+                <div style="border-left: 3px solid {perm_color}; padding: 10px; margin: 10px 0; background: rgba(255,255,255,0.03); border-radius: 0 6px 6px 0;">
+                    <p style="margin: 0; font-family: 'Courier New', monospace; font-size: 13px; font-weight: 700; color: #e2e8f0;">{perm['pattern']}</p>
+                    <p style="margin: 5px 0 0 0; font-size: 12px; color: #94a3b8;">{perm['description']}</p>
+                    <p style="margin: 5px 0 0 0; font-size: 11px;"><span style="color: {perm_color}; font-weight: 700;">Risk: {perm_risk}</span> <span style="color: #64748b;">| Category: {perm['category']}</span></p>
                 </div>
 """
 

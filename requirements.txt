@@ -25,3 +25,6 @@ python-magic-bin==0.4.14; sys_platform == 'win32'
 
 # JavaScript AST parsing
 esprima==4.0.1
+
+# Dynamic analysis (optional - also run: playwright install chromium)
+playwright>=1.40.0

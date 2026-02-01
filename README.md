@@ -34,6 +34,12 @@ Get a free VirusTotal API key at https://www.virustotal.com/gui/join-us
 ```bash
 # Analyze an extension by its ID
 python src/analyzer.py <extension_id>
+
+# Fast mode for debugging (skips VirusTotal and Cuckoo Sandbox)
+python src/analyzer.py <extension_id> --fast
+
+# Example: skip just VT
+python src/analyzer.py <extension_id> --skip-vt
 ```
 
 The extension ID is the 32-character string from the Chrome Web Store URL:

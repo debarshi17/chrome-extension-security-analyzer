@@ -56,6 +56,20 @@ class FalsePositiveFilter:
         r'vue[-.][\d\.]+\.js',
         r'angular[-.][\d\.]+\.js',
 
+        # lit-html / Polymer / LitElement
+        r'lit-html',
+        r'lit-element',
+        r'polymer',
+        r'\$lit\$',
+        r'\{\{lit-',
+
+        # Other frameworks
+        r'svelte',
+        r'preact',
+        r'ember',
+        r'backbone',
+        r'handlebars',
+
         # Common UI libraries
         r'bootstrap[-.][\d\.]+\.js',
         r'fontawesome',
@@ -227,22 +241,26 @@ class FalsePositiveFilter:
             'suppression_count': len(suppressed)
         }
 
-    def filter_malicious_patterns(self, patterns):
+    def filter_malicious_patterns(self, patterns, context=None):
         """
         Filter malicious code patterns to remove false positives
 
         Args:
             patterns: List of detected malicious patterns
+            context: Optional dict with analysis context (e.g. {'uses_firebase': True})
 
         Returns:
             dict: Filtered patterns
         """
         filtered = []
         suppressed = []
+        context = context or {}
+        uses_firebase = context.get('uses_firebase', False)
 
         for pattern in patterns:
             pattern_name = pattern.get('name', '')
             evidence = pattern.get('evidence', '')
+            severity = pattern.get('severity', '')
 
             # Check if evidence contains benign library
             is_benign, library_name = self.is_benign_library(evidence)
@@ -251,10 +269,26 @@ class FalsePositiveFilter:
                 suppressed.append({
                     'pattern': pattern_name,
                     'reason': f'Benign library detected: {library_name}',
-                    'evidence': evidence[:100]  # First 100 chars
+                    'evidence': evidence[:100]
                 })
-            else:
-                filtered.append(pattern)
+                continue
+
+            # Firebase context: downgrade patterns that are weak when
+            # the only backend is Firebase (legitimate infrastructure)
+            if uses_firebase and severity in ('high', 'critical'):
+                technique = pattern.get('technique', '')
+                # These patterns over-fire when Firebase is the data destination
+                # because Firebase config contains 'authDomain' which matches auth patterns
+                if technique in ('URL-conditional activation', 'DOM monitoring near sensitive fields'):
+                    pattern = dict(pattern)  # don't mutate original
+                    pattern['severity'] = 'low'
+                    pattern['fp_note'] = (
+                        'Downgraded: extension uses Firebase as backend. '
+                        'Firebase config contains authDomain which can trigger '
+                        'auth-related heuristics. Verify actual behavior.'
+                    )
+
+            filtered.append(pattern)
 
         return {
             'filtered_patterns': filtered,
