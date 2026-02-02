@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="chrome-extension-security-analyzer",
     version="0.1.0",
-    description="AI-powered security analysis tool for Chrome extensions",
+    description="Static and dynamic security analysis tool for Chrome extensions",
     author="debarshi17",
     author_email="your-email@example.com",
     url="https://github.com/debarshi17/chrome-extension-security-analyzer",

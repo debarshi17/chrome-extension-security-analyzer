@@ -107,7 +107,7 @@ Key insight: Don't rescan everything on each update. Score **what changed**.
                      │
          ┌───────────▼────────────┐
          │  Risk Signal Engine    │
-         │  (Rules + LLM)         │
+         │  (Rules + Context)         │
          │  Score new signals     │
          │  Detect false positives│
          └───────────┬────────────┘
@@ -260,21 +260,21 @@ class DiffEngine:
 
 **File:** `src/risk_signal_engine.py`
 
-Purpose: Deterministic rules + LLM judgment on diff.
+Purpose: Deterministic rules + contextual analysis on diff.
 
 ```python
 class RiskSignalEngine:
     """
     Two-layer risk analysis:
     1. Fast deterministic rules
-    2. LLM context + intent
+    2. Contextual analysis + intent
     """
     
     def analyze_diff(
         self,
         diff: dict,
         previous_risk_score: float,
-        analysis_client=None  # Optional contextual analysis
+        analysis_client=None  # Optional NLP-based judgment
     ) -> dict:
         """
         Returns:
@@ -308,19 +308,19 @@ class RiskSignalEngine:
                 "Monitor network traffic to new domains",
                 "Check for time-delayed activation"
             ],
-            "llm_analyst_summary": "Update shows significant capability expansion..."
+            "analyst_summary": "Update shows significant capability expansion..."
         }
         """
         
         # Layer 1: Deterministic Rules
         signals = self._apply_deterministic_rules(diff)
         
-        # Layer 2: LLM Context
-        llm_judgment = self._get_llm_judgment(diff, signals)
+        # Layer 2: Contextual Analysis
+        context_judgment = self._get_contextual_judgment(diff, signals)
         
         return {
             "new_risk_signals": signals,
-            "false_positive_assessment": llm_judgment,
+            "false_positive_assessment": context_judgment,
             "recommended_next_signals": self._generate_watch_list(signals, diff)
         }
     
@@ -340,8 +340,8 @@ class RiskSignalEngine:
         
         return signals
     
-    def _get_llm_judgment(self, diff: dict, signals: List[dict]) -> dict:
-        """Analyze context + intent."""
+    def _get_contextual_judgment(self, diff: dict, signals: List[dict]) -> dict:
+        """Analyze context and intent of code changes."""
         # Use production prompt from architecture doc
         pass
 ```
@@ -515,7 +515,7 @@ CREATE TABLE updates (
 
 ---
 
-## 📝 Production LLM Prompt (Ready to Use)
+## 📝 Production Analysis Prompt (Ready to Use)
 
 **File:** `src/prompts/delta_risk_analysis.md`
 
@@ -621,4 +621,4 @@ This is the production-grade approach.
 
 ---
 
-**Next Session:** Ready to implement Phase 12.1?
+**Next Step:** Implement Phase 12.1 (Snapshot Store).

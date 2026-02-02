@@ -64,8 +64,7 @@ with zipfile.ZipFile(crx_path, 'r') as zip_ref:
 
 ---
 
-### Step 2.5: Host Permissions Analysis ✨ NEW (Phase 9)
-**File:** [src/host_permissions_analyzer.py](src/host_permissions_analyzer.py)
+### Step 2.5: Host Permissions Analysis**File:** [src/host_permissions_analyzer.py](src/host_permissions_analyzer.py)
 **Function:** `analyze_manifest(manifest_path)`
 
 **What it does:**
@@ -392,8 +391,7 @@ if domain in ioc_db['domains']:
 
 ---
 
-### Step 8.5: Threat Campaign Attribution ✨ NEW (Phase 9)
-**File:** [src/threat_attribution.py](src/threat_attribution.py)
+### Step 8.5: Threat Campaign Attribution**File:** [src/threat_attribution.py](src/threat_attribution.py)
 **Function:** `search_threat_campaigns(extension_id, extension_name)`
 
 **What it does:**
@@ -440,13 +438,11 @@ if 'zoom' in ext_name_lower and 'download' in ext_name_lower:
 - Sections:
   1. Executive Summary
   2. Malware Classification
-  3. **Host Permissions & Website Access** ✨ NEW
-  4. Domain Intelligence
+  3. **Host Permissions & Website Access**  4. Domain Intelligence
   5. VirusTotal Results
   6. Advanced Malware Detection
   7. PII Classification
-  8. **Threat Campaign Attribution** ✨ NEW
-  9. IOC Database
+  8. **Threat Campaign Attribution**  9. IOC Database
   10. Recommendations
 - Color-coded risk levels
 - Clickable references

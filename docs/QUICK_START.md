@@ -244,12 +244,12 @@ The HTML report includes:
 
 1. **Executive Summary** - Risk score, verdict, key findings
 2. **Malware Classification** - Attack vectors, techniques
-3. **Host Permissions & Website Access** ✨ - Which sites it can access
+3. **Host Permissions & Website Access** - Which sites it can access
 4. **Domain Intelligence** - C2 servers, DGA detection
 5. **VirusTotal Results** - Vendor detections
 6. **Advanced Malware Detection** - CSP manipulation, DOM injection
 7. **PII Classification** - Data collection
-8. **Threat Campaign Attribution** ✨ - Campaign identification with sources
+8. **Threat Campaign Attribution** - Campaign identification with sources
 9. **Dynamic Analysis** - Behavioral findings (if Cuckoo enabled)
 10. **Recommendations** - Remediation steps
 
