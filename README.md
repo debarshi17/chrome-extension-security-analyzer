@@ -12,6 +12,8 @@ A professional-grade static analysis tool for detecting malicious Chrome extensi
 - **PII Classification**: Identifies what sensitive data is being accessed (credentials, cookies, financial data)
 - **Advanced Malware Detection**: Detects CSP manipulation, DOM event injection, WebSocket C2, time bombs
 - **Permission Risk Analysis**: Flags dangerous permission combinations with security implications
+- **Dynamic Network Capture**: Playwright + CDP-based runtime traffic analysis with WebSocket detection
+- **False Positive Suppression**: Filters benign libraries (jQuery, Firebase, React) to reduce noise
 - **Professional HTML Reports**: Dark-themed threat intelligence reports with code evidence
 
 ## Installation
@@ -35,11 +37,17 @@ Get a free VirusTotal API key at https://www.virustotal.com/gui/join-us
 # Analyze an extension by its ID
 python src/analyzer.py <extension_id>
 
-# Fast mode for debugging (skips VirusTotal and Cuckoo Sandbox)
+# Fast mode (skips VirusTotal API calls for offline/quick analysis)
 python src/analyzer.py <extension_id> --fast
 
-# Example: skip just VT
+# Skip just VirusTotal
 python src/analyzer.py <extension_id> --skip-vt
+
+# Enable dynamic network capture (requires: pip install playwright && playwright install chromium)
+python src/analyzer.py <extension_id> --dynamic
+
+# Dynamic analysis with custom timeout (default 30s)
+python src/analyzer.py <extension_id> --dynamic --dynamic-timeout 45
 ```
 
 The extension ID is the 32-character string from the Chrome Web Store URL:
@@ -152,8 +160,8 @@ The analyzer generates:
 
 ## Limitations
 
-- Static analysis only - doesn't execute code
-- Can't analyze code loaded from remote servers at runtime
+- Static analysis covers most detection; dynamic analysis (`--dynamic`) requires Playwright
+- Can't analyze code loaded from remote servers at runtime (unless `--dynamic` is used)
 - Heavily obfuscated code may evade some pattern matching
 - Some patterns may produce false positives - always review context
 

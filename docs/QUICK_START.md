@@ -8,12 +8,17 @@ pip install -r requirements.txt
 ```
 
 ### 2. Configure VirusTotal API
+Copy the template and add your key:
+```bash
+cp config.json.template config.json
+```
+
 Edit `config.json`:
 ```json
 {
   "virustotal": {
     "api_key": "your_api_key_here",
-    "enabled": true
+    "rate_limit_delay": 15
   }
 }
 ```
@@ -22,11 +27,11 @@ Get your free API key: https://www.virustotal.com/gui/join-us
 
 ### 3. Run Analysis
 ```bash
-# Analyze ZoomStealer malware
-python src/analyzer.py pdadlkbckhinonakkfkdaadceojbekep
-
 # Analyze any extension (get ID from Chrome Web Store URL)
 python src/analyzer.py <extension_id>
+
+# Fast mode (skips VirusTotal API calls)
+python src/analyzer.py <extension_id> --fast
 ```
 
 ### 4. View Reports
@@ -37,85 +42,62 @@ reports/<extension_id>_threat_intel_report.html
 
 ---
 
-## Advanced Setup (With Dynamic Analysis)
+## Advanced Setup (With Dynamic Network Capture)
 
-### Enable Cuckoo Sandbox
+### Enable Playwright Dynamic Analysis
 
-Cuckoo provides **real dynamic analysis** by running extensions in isolated VMs.
+Dynamic analysis launches a real Chromium browser with the extension loaded and captures all network traffic via Chrome DevTools Protocol (CDP).
 
-### Quick Docker Setup (5 minutes)
+### Setup
 
-**1. Install Docker Desktop:**
-- Windows: https://www.docker.com/products/docker-desktop/
-- Mac: https://www.docker.com/products/docker-desktop/
-- Linux: `sudo apt-get install docker-compose`
-
-**2. Start Cuckoo:**
+**1. Install Playwright:**
 ```bash
-docker-compose up -d
+pip install playwright
+playwright install chromium
 ```
 
-**3. Wait for startup (30 seconds):**
+**2. Run analysis with dynamic capture:**
 ```bash
-# Check status
-docker-compose ps
-
-# View logs
-docker-compose logs -f cuckoo
+python src/analyzer.py <extension_id> --dynamic
 ```
 
-**4. Test connection:**
+**3. Custom timeout (default 30 seconds):**
 ```bash
-python test_cuckoo.py
+python src/analyzer.py <extension_id> --dynamic --dynamic-timeout 45
 ```
 
-Expected output:
-```
-✅ SUCCESS - Cuckoo API is reachable!
-[+] Cuckoo Status:
-    Version: 2.0.7
-    Pending: 0
-    Running: 0
-
-READY FOR DYNAMIC ANALYSIS
-```
-
-**5. Run analysis with dynamic analysis:**
-```bash
-python src/analyzer.py pdadlkbckhinonakkfkdaadceojbekep
-```
-
-Look for this section:
-```
-[CUCKOO] STEP 5.5: Dynamic analysis (Cuckoo Sandbox)...
-[CUCKOO] Task submitted. Task ID: 1
-[+] Dynamic analysis complete: MALICIOUS
-```
+**What dynamic analysis captures:**
+- All HTTP/HTTPS requests made by the extension
+- WebSocket connections and frame data
+- POST data payloads (potential exfiltration)
+- Beaconing patterns (repeated calls to same endpoint)
+- Post-navigation exfiltration (data sent after page loads)
 
 ---
 
 ## What Gets Analyzed
 
 ### Static Analysis (Always Enabled):
-- ✅ Chrome Web Store metadata
-- ✅ Extension download & unpacking
-- ✅ **Host permissions** - which websites it can access
-- ✅ JavaScript AST analysis - code structure
-- ✅ Malicious pattern detection
-- ✅ Domain intelligence (DGA, typosquatting, C2)
-- ✅ VirusTotal reputation checks
-- ✅ **Threat campaign attribution** (DarkSpectre, ZoomStealer, etc.)
-- ✅ PII data classification
-- ✅ IOC database cross-reference
+- Chrome Web Store metadata
+- Extension download & unpacking
+- **Host permissions** - which websites it can access
+- JavaScript AST analysis - code structure
+- Malicious pattern detection (70+ patterns)
+- Domain intelligence (DGA, typosquatting, C2)
+- VirusTotal reputation checks
+- **Threat campaign attribution** (DarkSpectre, ZoomStealer, etc.)
+- PII data classification
+- IOC database cross-reference
+- False positive filtering (benign libraries suppressed)
 
-### Dynamic Analysis (If Cuckoo Enabled):
-- ✅ **Real execution in isolated VM**
-- ✅ Network traffic monitoring (HTTP, DNS, WebSocket)
-- ✅ File operations (read, write, delete)
-- ✅ Registry modifications (Windows)
-- ✅ Process creation tracking
-- ✅ API call logging
-- ✅ Behavioral signatures
+### Dynamic Analysis (With `--dynamic` flag):
+- **Real browser execution** with extension loaded
+- Network traffic monitoring (HTTP, HTTPS, WebSocket)
+- Extension-initiated request identification
+- Suspicious connection scoring
+- Beaconing detection
+- Post-navigation exfiltration detection
+- WebSocket C2 channel detection
 
 ---
 
@@ -126,37 +108,21 @@ Look for this section:
 {
   "virustotal": {
     "api_key": "your_key_here",
-    "enabled": true
+    "rate_limit_delay": 15
   },
-  "analysis": {
-    "max_domains_to_check": 50,
-    "timeout_seconds": 30
-  },
-  "cuckoo": {
-    "api_url": "http://localhost:8090",
+  "google_custom_search": {
     "api_key": null,
-    "enabled": true,
-    "timeout": 300,
-    "package": "chrome"
-  }
-}
-```
-
-### Disable Cuckoo
-If you don't want dynamic analysis:
-```json
-{
-  "cuckoo": {
+    "cx_id": null,
     "enabled": false
   }
 }
 ```
 
-The analyzer will gracefully skip Step 5.5 and continue with static analysis only.
+VirusTotal is the only required external service. Dynamic analysis uses Playwright locally (no external API needed).
 
 ---
 
-## Example: Analyzing ZoomStealer
+## Example Output
 
 ### Command:
 ```bash
@@ -179,8 +145,6 @@ Manifest Version: 3
 [+] Risk Assessment: CRITICAL
 [!] CRITICAL: Extension has <all_urls> access
 [!] Accesses 13 sensitive domain(s)
-    • Video Conferencing: 8 domain(s)
-    • Social Media: 5 domain(s)
 ```
 
 **3. Domain Intelligence:**
@@ -200,24 +164,11 @@ Domain: us-central1-webinarstvus.cloudfunctions.net
 
 [!] VIRUSTOTAL ALERT: 1 MALICIOUS domain(s) detected!
     [ALERT] meetingtv.us
-       • Detections: 8 vendors
-       • Flagged by: ArcSight, Certego, CyRadar
+       Detections: 8 vendors
+       Flagged by: ArcSight, Certego, CyRadar
 ```
 
-**5. Dynamic Analysis (if Cuckoo enabled):**
-```
-[CUCKOO] STEP 5.5: Dynamic analysis...
-[CUCKOO] Task submitted. Task ID: 42
-[+] Dynamic analysis complete: SUSPICIOUS
-    Risk Score: 7/10
-
-[!] 3 malicious behavior(s) detected:
-    • Network communication to suspicious domain
-    • Attempts to exfiltrate data
-    • Suspicious API calls detected
-```
-
-**6. Threat Attribution:**
+**5. Threat Attribution:**
 ```
 [ATTRIBUTION] STEP 8.5: Threat campaign attribution...
 [+] Attribution: DarkSpectre / ZoomStealer
@@ -226,7 +177,7 @@ Domain: us-central1-webinarstvus.cloudfunctions.net
     Impact: 8.8 million users affected
 ```
 
-**7. Final Verdict:**
+**6. Final Verdict:**
 ```
 ================================================================================
 VERDICT: CRITICAL THREAT - VIRUSTOTAL CONFIRMED MALICIOUS
@@ -250,7 +201,7 @@ The HTML report includes:
 6. **Advanced Malware Detection** - CSP manipulation, DOM injection
 7. **PII Classification** - Data collection
 8. **Threat Campaign Attribution** - Campaign identification with sources
-9. **Dynamic Analysis** - Behavioral findings (if Cuckoo enabled)
+9. **Dynamic Network Analysis** - Traffic capture findings (if `--dynamic` used)
 10. **Recommendations** - Remediation steps
 
 ---
@@ -259,73 +210,45 @@ The HTML report includes:
 
 ### "VirusTotal API key not found"
 - Get free API key: https://www.virustotal.com/gui/join-us
-- Add to config.json: `"api_key": "your_key_here"`
+- Copy template: `cp config.json.template config.json`
+- Add your key to `config.json`
 
-### "Cuckoo Sandbox not configured"
-- Normal if you haven't set up Cuckoo
-- Dynamic analysis is optional
-- To enable: See [CUCKOO_SETUP.md](CUCKOO_SETUP.md)
-
-### "Cannot connect to Cuckoo"
+### "Playwright not installed" (when using --dynamic)
 ```bash
-# Check if running
-docker-compose ps
-
-# View logs
-docker-compose logs -f cuckoo
-
-# Restart
-docker-compose restart cuckoo
+pip install playwright
+playwright install chromium
 ```
 
 ### "Extension download failed"
 - Extension may be removed from Chrome Web Store
 - Check extension ID is correct
-- Try with different extension
+- Try with a different extension
 
 ---
 
 ## Testing with Benign Extensions
 
-**uBlock Origin (should be CLEAN):**
+**uBlock Origin (should be LOW risk):**
 ```bash
-python src/analyzer.py cjpalhdlnbpafiamejdnhcphjbkeiagm
+python src/analyzer.py cjpalhdlnbpafiamejdnhcphjbkeiagm --fast
 ```
 
-Expected: Risk Score 0-2/10, MINIMAL or LOW risk
-
-**Grammarly (should be LOW):**
-```bash
-python src/analyzer.py kbfnbcaeplbcioakkpcpgfkobkghlhen
-```
-
-Expected: Risk Score 1-3/10, LOW risk (uses cloud APIs legitimately)
+Expected: Risk Score 2-3/10, LOW risk
 
 ---
 
 ## Next Steps
 
 1. **Read Architecture**: [ARCHITECTURE.md](ARCHITECTURE.md) - How the analyzer works
-2. **Quality Improvements**: [QUALITY_IMPROVEMENTS.md](QUALITY_IMPROVEMENTS.md) - Edge cases and testing
-3. **Cuckoo Setup**: [CUCKOO_SETUP.md](CUCKOO_SETUP.md) - Dynamic analysis setup
-4. **Phase Documentation**: See `PHASE_*.md` files for development history
-
----
-
-## Support
-
-- **Issues**: Report bugs or feature requests in GitHub Issues
-- **Cuckoo Help**: https://cuckoo.sh/docs/
-- **VirusTotal API**: https://developers.virustotal.com/reference/overview
+2. **VirusTotal API**: https://developers.virustotal.com/reference/overview
 
 ---
 
 ## Current Status
 
-✅ **Static Analysis**: Fully operational
-✅ **VirusTotal Integration**: Configured (API key required)
-✅ **Host Permissions Analysis**: Working
-✅ **Threat Attribution**: Working (pattern-based)
-✅ **Cuckoo Sandbox**: Configured (Docker setup ready)
-
-**Next**: Start Cuckoo with `docker-compose up -d` for dynamic analysis!
+- **Static Analysis**: Fully operational
+- **VirusTotal Integration**: Configured (API key required)
+- **Host Permissions Analysis**: Working
+- **Threat Attribution**: Working (pattern-based + OSINT)
+- **Dynamic Network Capture**: Working (requires Playwright)
+- **False Positive Filtering**: Working (benign library suppression)

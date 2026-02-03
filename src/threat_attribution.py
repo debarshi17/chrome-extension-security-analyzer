@@ -28,12 +28,26 @@ class ThreatAttribution:
         # Load/create attribution cache database
         self.attribution_cache = self._load_attribution_cache()
 
+        # Well-known benign extensions that should never be flagged via OSINT
+        # (they appear in security articles as comparisons/targets of impersonation)
+        self.known_benign_extensions = {
+            'cjpalhdlnbpafiamejdnhcphjbkeiagm',  # uBlock Origin
+            'cfhdojbkjhnklbpkdaibdccddilifddb',  # Adblock Plus
+            'gighmmpiobklfepjocnamgkkbiglidom',  # AdBlock
+            'gcbommkclmhbdidifoemcolakmookinol',  # HTTPS Everywhere
+            'pkehgijcmpdhfbdbbnkijodmdjhbjlgp',  # Privacy Badger
+            'hdokiejnpimakedhajhdlcegeplioahd',  # LastPass
+            'nngceckbapebfimnlniiiahkandclblb',  # Bitwarden
+            'aapbdbdomjkkjkaonfhkkikfgjllcleb',  # Google Translate
+            'aohghmighlieiainnegkcijnfilokake',  # Google Docs Offline
+        }
+
         # Campaign keywords to look for in search results
         self.campaign_keywords = [
             'darkspectre', 'dark spectre', 'zoomstealer', 'zoom stealer',
             'shadypanda', 'shady panda', 'ghostposter', 'ghost poster',
             'cacheflow', 'magnetgoblin', 'malicious extension', 'malware campaign',
-            'threat actor', 'apt', 'spyware', 'data theft', 'credential stealing',
+            'threat actor', 'spyware', 'data theft', 'credential stealing',
             'layerx', 'koi security', 'browser extension attack', 'chrome malware'
         ]
 
@@ -259,11 +273,39 @@ class ThreatAttribution:
                                 if keyword not in results['keywords_found']:
                                     results['keywords_found'].append(keyword)
 
-                        # Check for malicious indicators
-                        malicious_terms = ['malicious', 'malware', 'threat', 'attack', 'steal', 'exfiltrate',
+                        # Check for malicious indicators WITH PROXIMITY
+                        # The extension ID must appear near malicious terms (within ~500 chars)
+                        # to avoid false positives where the extension is mentioned in a
+                        # different context on a page that also discusses malware
+                        malicious_terms = ['malicious', 'malware', 'steal', 'exfiltrate',
                                            'data theft', 'spyware', 'adware', 'phishing', 'hijack']
-                        if any(term in page_text for term in malicious_terms):
-                            results['is_malicious'] = True
+                        id_lower = extension_id.lower()
+                        id_positions = []
+                        search_start = 0
+                        while True:
+                            pos = page_text.find(id_lower, search_start)
+                            if pos == -1:
+                                break
+                            id_positions.append(pos)
+                            search_start = pos + 1
+
+                        # Check if any malicious term appears within 500 chars of the extension ID
+                        proximity_window = 500
+                        for term in malicious_terms:
+                            term_start = 0
+                            while True:
+                                term_pos = page_text.find(term, term_start)
+                                if term_pos == -1:
+                                    break
+                                for id_pos in id_positions:
+                                    if abs(term_pos - id_pos) <= proximity_window:
+                                        results['is_malicious'] = True
+                                        break
+                                if results['is_malicious']:
+                                    break
+                                term_start = term_pos + 1
+                            if results['is_malicious']:
+                                break
 
                         # Detect specific campaigns
                         if 'darkspectre' in page_text or 'dark spectre' in page_text:
@@ -547,6 +589,27 @@ class ThreatAttribution:
         """
         try:
             print(f"[i] Performing OSINT research on '{extension_name}' ({extension_id})")
+
+            # Skip OSINT for known benign extensions (they appear in security articles
+            # as comparisons or impersonation targets, causing false positives)
+            if extension_id in self.known_benign_extensions:
+                print(f"[i] Skipping OSINT for known benign extension: {extension_name}")
+                return {
+                    'available': True,
+                    'extension_id': extension_id,
+                    'extension_name': extension_name,
+                    'attribution_found': False,
+                    'campaign_name': None,
+                    'campaign_description': None,
+                    'threat_actor': None,
+                    'confidence': 'NONE',
+                    'source_articles': [],
+                    'osint_summary': None,
+                    'chrome_store_url': f"https://chromewebstore.google.com/detail/{extension_id}",
+                    'google_search_url': None,
+                    'search_performed': False,
+                    'skipped_reason': 'known_benign'
+                }
 
             # Primary search query - most effective
             primary_query = f'"{extension_id}" malware threat campaign'

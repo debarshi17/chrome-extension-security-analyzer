@@ -229,70 +229,37 @@ malicious_count = detections['malicious']
 
 ---
 
-### Step 5.5: Cuckoo Sandbox Dynamic Analysis
-**File:** [src/cuckoo_sandbox.py](src/cuckoo_sandbox.py)
-**Function:** `submit_extension(extension_dir, extension_id)`
+### Step 5.5: Dynamic Network Capture (Playwright + CDP)
+**File:** [src/network_capture.py](src/network_capture.py)
+**Class:** `NetworkCaptureAnalyzer`
 
 **What it does:**
-- **ACTUAL sandboxing** via external Cuckoo Sandbox instance
-- Submits .crx file to Cuckoo REST API
-- Waits for analysis to complete
-- Extracts behavioral indicators
+- Launches Chromium with the extension loaded via `--load-extension`
+- Attaches Chrome DevTools Protocol (CDP) listeners for network events
+- Browses trigger pages (Gmail, Amazon, GitHub, Facebook, etc.) to provoke extension behavior
+- Captures all HTTP/HTTPS requests and WebSocket connections
+- Identifies extension-initiated traffic by checking `initiator.url`
+- Scores suspicious connections (POST with body, high-risk TLDs, raw IPs, beaconing)
 
-**Is it REALLY sandboxing?**
-- ✅ **YES** - if you have Cuckoo Sandbox installed and running
-- ❌ **NO** - if not configured (gracefully skips)
+**Requires:** `pip install playwright && playwright install chromium`
 
-**What Cuckoo Actually Does:**
-1. Runs extension in isolated VM
-2. Monitors:
-   - Network traffic (HTTP, DNS, TCP connections)
-   - File operations (read, write, delete)
-   - Registry modifications (Windows)
-   - Process creation
-   - API calls
-3. Generates behavioral report with signatures
+**Activation:** `--dynamic` CLI flag (not run by default)
 
-**Setup Required:**
-```bash
-# Install Cuckoo (external tool)
-pip install cuckoo
-cuckoo init
+**Detection capabilities:**
+- Extension-to-server communication (HTTP and WebSocket)
+- Data exfiltration via POST requests
+- Beaconing patterns (repeated calls to same endpoint)
+- Post-navigation exfiltration (data sent shortly after page load)
+- WebSocket C2 channels with frame inspection
+- Credential/token data in request payloads
 
-# Start Cuckoo API server
-cuckoo api
+**False positive suppression:**
+- Allowlisted domains (Google, CDNs, analytics)
+- Known SaaS WebSocket patterns (ActionCable, Firebase, Pusher, Intercom, etc.)
+- Static resource filtering (images, fonts, CSS)
+- Frame-aware WebSocket scoring (0 frames sent = likely benign)
 
-# Configure in config.json
-{
-  "cuckoo": {
-    "api_url": "http://localhost:8090",
-    "api_key": "optional"
-  }
-}
-```
-
-**Actually performs:**
-```python
-# Submit file
-files = {'file': open('extension.crx', 'rb')}
-response = requests.post(
-    f"{cuckoo_api}/tasks/create/file",
-    files=files,
-    data={'package': 'chrome', 'timeout': 300}
-)
-
-# Poll for results
-task_id = response.json()['task_id']
-while True:
-    status = requests.get(f"{cuckoo_api}/tasks/view/{task_id}")
-    if status == 'reported':
-        report = requests.get(f"{cuckoo_api}/tasks/report/{task_id}")
-        break
-```
-
-**Output:** Dynamic analysis report with malicious behaviors, network activity, file ops
-
-**Current Status:** Optional feature - works if Cuckoo is installed, otherwise skipped
+**Output:** Structured dict with extension requests, suspicious connections, WebSocket data, beaconing patterns, and overall verdict (CLEAN/LOW_RISK/SUSPICIOUS/MALICIOUS)
 
 ---
 
@@ -474,10 +441,10 @@ html = f"""
 ## Key Architectural Decisions
 
 ### 1. What IS Actually Sandboxed?
-**Cuckoo Sandbox (Step 5.5):**
-- ✅ Real sandboxing if Cuckoo installed
-- ❌ Optional - gracefully skips if not configured
-- Requires external setup (Cuckoo server)
+**Dynamic Network Capture (Step 5.5):**
+- Playwright + CDP network monitoring with real Chromium browser
+- Optional - requires `--dynamic` flag and Playwright installed
+- Runs locally, no external server needed
 
 **Everything else:**
 - Static analysis (no execution)
@@ -552,7 +519,7 @@ Add `cloudfunctions.net` to legitimate infrastructure list
 **Actual Analysis Time:** 2-5 minutes (depending on VT rate limits)
 **External Dependencies:**
 - VirusTotal API (required for domain checks)
-- Cuckoo Sandbox (optional for dynamic analysis)
+- Playwright (optional for dynamic network capture)
 - BeautifulSoup (Chrome Web Store scraping)
 
 **Output:**
