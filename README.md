@@ -165,6 +165,16 @@ The analyzer generates:
 - Heavily obfuscated code may evade some pattern matching
 - Some patterns may produce false positives - always review context
 
+  Report Screenshots:
+  <img width="1447" height="690" alt="image" src="https://github.com/user-attachments/assets/c50b332c-b386-4a1b-b657-c7628fab7059" />
+  <img width="1461" height="695" alt="image" src="https://github.com/user-attachments/assets/677d80b6-c0f7-4f7c-a3f6-01852c34f543" />
+  <img width="1176" height="610" alt="image" src="https://github.com/user-attachments/assets/4c80cfbe-225d-490c-8938-ac29a1b2b0b5" />
+  <img width="1570" height="880" alt="image" src="https://github.com/user-attachments/assets/c02ace49-b152-4826-b41c-7b41abb110d3" />
+
+
+
+
+
 ## Legal
 
 For authorized security testing and research only. Don't use for malicious purposes.
