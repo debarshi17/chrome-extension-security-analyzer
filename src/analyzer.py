@@ -48,7 +48,7 @@ class ChromeExtensionAnalyzer:
     
     def analyze_extension(self, extension_id):
         """
-        Complete analysis pipeline with professional threat intelligence
+        Complete analysis pipeline with professional threat analysis
         
         Args:
             extension_id (str): Chrome extension ID
@@ -58,7 +58,7 @@ class ChromeExtensionAnalyzer:
         """
         print("=" * 80)
         print("[SCAN] CHROME EXTENSION SECURITY ANALYZER")
-        print("    Professional Threat Intelligence Edition with VirusTotal")
+        print("    Professional Threat Analysis Edition with VirusTotal")
         print("=" * 80)
         print(f"\n[+] Target Extension ID: {extension_id}\n")
 
@@ -367,7 +367,7 @@ class ChromeExtensionAnalyzer:
         
         return results
     def _analyze_domain_intelligence(self, results):
-        """Analyze all external domains with threat intelligence"""
+        """Analyze all external domains with threat analysis"""
         
         external_scripts = results.get('external_scripts', [])
         domain_intelligence = []
@@ -767,7 +767,7 @@ Features:
   [OK] VirusTotal domain reputation checking
   [OK] Campaign attribution (DarkSpectre, ZoomStealer, SpyVPN, etc.)
   [OK] Domain intelligence (C2, DGA, typosquatting detection)
-  [OK] Professional threat intelligence reports
+  [OK] Professional threat analysis reports
   [OK] PII/data classification analysis
   [OK] Advanced malware detection (CSP manipulation, DOM injection, etc.)
   [OK] Dynamic network capture via Playwright + CDP (--dynamic flag)
@@ -835,7 +835,7 @@ def main():
     print("""
     ========================================================================
        CHROME EXTENSION SECURITY ANALYZER - PROFESSIONAL EDITION
-       Threat Intelligence Platform with VirusTotal Integration
+       Threat Analysis Platform with VirusTotal Integration
     ========================================================================
     """)
 

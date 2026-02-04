@@ -1,5 +1,5 @@
 """
-Professional Threat Intelligence Report Generator - FIXED VERSION
+Professional Threat Analysis Report Generator - FIXED VERSION
 Shows exact POST destinations, data sources, and VirusTotal cross-references
 Modern design inspired by Mandiant, CrowdStrike, Unit 42
 """
@@ -11,14 +11,14 @@ import json
 import html as html_module  # For escaping permission strings that contain angle brackets like <all_urls>
 
 class ProfessionalReportGenerator:
-    """Generates professional threat intelligence reports"""
+    """Generates professional threat analysis reports"""
     
     def __init__(self):
         self.report_dir = Path("reports")
         self.report_dir.mkdir(exist_ok=True)
     
-    def generate_threat_intel_report(self, results):
-        """Generate professional threat intelligence report"""
+    def generate_threat_analysis_report(self, results):
+        """Generate professional threat analysis report"""
         
         extension_name = results.get('name', 'Unknown Extension')
         extension_id = results.get('extension_id', 'unknown')
@@ -40,7 +40,7 @@ class ProfessionalReportGenerator:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Threat Intelligence Report - {extension_name}</title>
+    <title>Threat Analysis Report - {extension_name}</title>
     <style>
         :root {{
             --color-critical: #ef4444;
@@ -832,7 +832,7 @@ class ProfessionalReportGenerator:
                     <div>
                         <h1 style="font-size: 24px; margin-bottom: 4px;">{extension_name}</h1>
                         <div class="subtitle" style="font-size: 12px; opacity: 0.7; margin-bottom: 2px;">{extension_id}</div>
-                        <div class="subtitle">Threat Intelligence Report • {datetime.now().strftime('%B %d, %Y at %H:%M UTC')}</div>
+                        <div class="subtitle">Threat Analysis Report • {datetime.now().strftime('%B %d, %Y at %H:%M UTC')}</div>
                     </div>
                 </div>
                 <div class="classification-badge">{risk_level} RISK</div>
@@ -925,7 +925,7 @@ class ProfessionalReportGenerator:
         html += f"""
         <div class="report-footer">
             <div class="footer-logo">Chrome Extension Security Analyzer</div>
-            <div>Professional Threat Intelligence • Powered by VirusTotal & AST Analysis</div>
+            <div>Professional Threat Analysis • Powered by VirusTotal & AST Analysis</div>
         </div>
     </div>
 </body>
@@ -2517,7 +2517,7 @@ class ProfessionalReportGenerator:
                     <!-- Header with status badge -->
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
                         <h4 style="margin: 0; font-size: 18px; font-weight: 600; color: #fff;">
-                            <span style="color: #f87171;">⚠</span> Threat Intelligence Report
+                            <span style="color: #f87171;">⚠</span> Threat Analysis Report
                         </h4>
                         <span style="background: {status_bg}; color: {status_text}; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border: 1px solid {status_border};">
                             {status_label}
@@ -2938,10 +2938,10 @@ class ProfessionalReportGenerator:
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
         
-        html = self.generate_threat_intel_report(results)
+        html = self.generate_threat_analysis_report(results)
         
         extension_id = results.get('extension_id', 'unknown')
-        html_path = output_dir / f"{extension_id}_threat_intel_report.html"
+        html_path = output_dir / f"{extension_id}_threat_analysis_report.html"
         
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html)
