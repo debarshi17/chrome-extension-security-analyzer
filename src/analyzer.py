@@ -51,6 +51,12 @@ class ChromeExtensionAnalyzer:
         self.taint_analyzer = TaintAnalyzer()
         self.wallet_detector = WalletHijackDetector()
         self.phishing_detector = PhishingDetector()
+
+        # Runtime flags (can be overridden after construction)
+        self.skip_vt = False
+        self.skip_osint = False
+        self.run_dynamic = False
+        self.dynamic_timeout = 30
     
     def analyze_extension(self, extension_id, browser=BrowserType.CHROME):
         """
@@ -354,7 +360,11 @@ class ChromeExtensionAnalyzer:
         # Step 8.5: Threat Attribution
         print("\n[ATTRIBUTION] STEP 8.5: Threat campaign attribution...")
         print("-" * 80)
-        attribution = self._check_threat_attribution(extension_id, results.get('name', 'Unknown'))
+        if getattr(self, 'skip_osint', False):
+            print("[i] OSINT threat attribution skipped (--fast or --skip-osint mode)")
+            attribution = None
+        else:
+            attribution = self._check_threat_attribution(extension_id, results.get('name', 'Unknown'))
 
         if attribution:
             results['threat_attribution'] = attribution
@@ -999,7 +1009,13 @@ Features:
     parser.add_argument(
         '--fast',
         action='store_true',
-        help='Enable fast mode (skip VirusTotal checks)'
+        help='Enable fast mode (skip VirusTotal and OSINT checks)'
+    )
+
+    parser.add_argument(
+        '--skip-osint',
+        action='store_true',
+        help='Skip OSINT threat attribution web searches'
     )
 
     parser.add_argument(
@@ -1074,6 +1090,7 @@ def main():
     # Honor CLI options for skipping external services - support --fast shortcut
     fast_mode = getattr(args, 'fast', False)
     analyzer.skip_vt = getattr(args, 'skip_vt', False) or fast_mode
+    analyzer.skip_osint = getattr(args, 'skip_osint', False) or fast_mode
     analyzer.run_dynamic = getattr(args, 'dynamic', False) and not fast_mode
     analyzer.dynamic_timeout = getattr(args, 'dynamic_timeout', 30)
 

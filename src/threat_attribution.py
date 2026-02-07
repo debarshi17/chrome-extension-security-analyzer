@@ -167,8 +167,8 @@ class ThreatAttribution:
         }
 
         all_urls_collected = set()
-        MAX_RESULTS_TO_PROCESS = 50  # ~15 pages worth
-        EARLY_EXIT_THRESHOLD = 3  # Stop searching if we find 3+ confirming articles
+        MAX_RESULTS_TO_PROCESS = 15  # Reduced from 50 for faster analysis
+        EARLY_EXIT_THRESHOLD = 2  # Stop searching if we find 2+ confirming articles
 
         print(f"[i] Comprehensive web search for extension ID (targeting {MAX_RESULTS_TO_PROCESS} results)...")
 
@@ -199,7 +199,7 @@ class ThreatAttribution:
             print(f"[!] DuckDuckGo search failed: {e}")
 
         # Priority 3: Only search more engines if we don't have enough results yet
-        if len(all_urls_collected) < 10:
+        if len(all_urls_collected) < 3:
             # Search Engine 3: Bing/Ecosia
             try:
                 print(f"[i] Searching Bing/Ecosia (need more results)...")
@@ -212,7 +212,7 @@ class ThreatAttribution:
                 print(f"[!] Bing/Ecosia search failed: {e}")
 
             # Search Engine 4: Startpage (only if still need more)
-            if len(all_urls_collected) < 10:
+            if len(all_urls_collected) < 3:
                 try:
                     print(f"[i] Searching Startpage...")
                     sp_urls = self._search_startpage(extension_id)
@@ -257,7 +257,7 @@ class ThreatAttribution:
 
             # Try to fetch and analyze the page content
             try:
-                page_response = self.session.get(href, timeout=10, allow_redirects=True)
+                page_response = self.session.get(href, timeout=5, allow_redirects=True)
                 if page_response.status_code == 200:
                     page_text = page_response.text.lower()
 
@@ -335,7 +335,7 @@ class ThreatAttribution:
                 # Skip pages that fail to load
                 continue
 
-            time.sleep(0.2)  # Reduced from 0.3s for faster processing
+            time.sleep(0.1)  # Reduced for faster processing
 
         print(f"[i] Analyzed {len(all_urls_collected)} URLs, found {len(results['articles'])} with extension mentions")
 
@@ -352,7 +352,7 @@ class ThreatAttribution:
         search_url = f"https://html.duckduckgo.com/html/?q=%22{extension_id}%22"
 
         try:
-            response = self.session.get(search_url, timeout=15)
+            response = self.session.get(search_url, timeout=5)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -368,10 +368,10 @@ class ThreatAttribution:
                         urls.add((href, title))
 
                 # Try to get more results via "next" button
-                for page in range(2, 6):  # Pages 2-5
+                for page in range(2, 4):  # Pages 2-3 (reduced for speed)
                     next_form = soup.find('form', class_='result--more__form')
                     if next_form:
-                        time.sleep(0.5)
+                        time.sleep(0.2)
                         # Get next page
                         next_params = {}
                         for inp in next_form.find_all('input'):
@@ -382,7 +382,7 @@ class ThreatAttribution:
                                 next_response = self.session.post(
                                     "https://html.duckduckgo.com/html/",
                                     data=next_params,
-                                    timeout=15
+                                    timeout=5
                                 )
                                 if next_response.status_code == 200:
                                     soup = BeautifulSoup(next_response.text, 'html.parser')
@@ -411,14 +411,14 @@ class ThreatAttribution:
         ]
 
         for base_url, endpoint_type in endpoints:
-            for page in range(0, 5):  # OPTIMIZED: 5 pages (was 10) for faster searches
+            for page in range(0, 2):  # OPTIMIZED: 2 pages for faster searches
                 try:
                     if endpoint_type == 'ecosia':
                         search_url = base_url.format(ext=extension_id, page=page)
                     else:
                         search_url = base_url.format(ext=extension_id, start=page * 10)
 
-                    response = self.session.get(search_url, timeout=15)
+                    response = self.session.get(search_url, timeout=5)
                     if response.status_code == 200:
                         soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -448,7 +448,7 @@ class ThreatAttribution:
                                 if href and href.startswith('http') and not any(x in href for x in ['bing.com', 'ecosia.org', 'duckduckgo.com', 'google.com']):
                                     urls.add((href, title))
 
-                    time.sleep(0.5)  # Rate limiting
+                    time.sleep(0.2)  # Rate limiting
 
                 except Exception as e:
                     continue
@@ -464,7 +464,7 @@ class ThreatAttribution:
 
         try:
             search_url = f"https://www.startpage.com/sp/search?query=%22{extension_id}%22"
-            response = self.session.get(search_url, timeout=15)
+            response = self.session.get(search_url, timeout=5)
 
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, 'html.parser')
@@ -516,7 +516,7 @@ class ThreatAttribution:
         for base_url, site_name, article_pattern in security_sites:
             try:
                 search_url = f"{base_url}{extension_id}"
-                response = self.session.get(search_url, timeout=10, allow_redirects=True)
+                response = self.session.get(search_url, timeout=5, allow_redirects=True)
 
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, 'html.parser')
@@ -536,7 +536,7 @@ class ThreatAttribution:
                         if is_article and is_meaningful_title and not_navigation:
                             # Fetch the article to verify extension ID is mentioned
                             try:
-                                article_response = self.session.get(href, timeout=10)
+                                article_response = self.session.get(href, timeout=5)
                                 if article_response.status_code == 200:
                                     if extension_id.lower() in article_response.text.lower():
                                         urls.add((href, title))
@@ -545,7 +545,7 @@ class ThreatAttribution:
                             except:
                                 continue
 
-                time.sleep(0.5)
+                time.sleep(0.2)
 
             except Exception as e:
                 continue
