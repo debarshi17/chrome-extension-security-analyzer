@@ -1095,6 +1095,235 @@ class EnhancedStaticAnalyzer:
                 'description': 'Declares optional host permissions - can request full web access after install review',
                 'technique': 'Deferred permission escalation'
             },
+            # ========== CRYPTOCURRENCY THEFT PATTERNS ==========
+            {
+                'name': 'Ethereum Wallet Override',
+                'pattern': r'window\s*\.\s*ethereum\s*=|Object\.defineProperty\s*\([^)]*["\']ethereum["\']',
+                'severity': 'critical',
+                'description': 'Overrides window.ethereum to intercept wallet transactions - CONFIRMED CRYPTO THEFT TECHNIQUE',
+                'technique': 'Wallet hijacking'
+            },
+            {
+                'name': 'Solana Wallet Override',
+                'pattern': r'window\s*\.\s*(solana|phantom)\s*=|Object\.defineProperty\s*\([^)]*["\']solana["\']',
+                'severity': 'critical',
+                'description': 'Overrides Solana/Phantom wallet object to intercept transactions',
+                'technique': 'Wallet hijacking'
+            },
+            {
+                'name': 'Web3 Provider Override',
+                'pattern': r'window\s*\.\s*web3\s*=|Object\.defineProperty\s*\([^)]*["\']web3["\']',
+                'severity': 'critical',
+                'description': 'Overrides Web3 provider to intercept blockchain transactions',
+                'technique': 'Wallet hijacking'
+            },
+            {
+                'name': 'Clipboard Wallet Address Swap',
+                'pattern': r'clipboard\.(readText|read)[^}]*?(0x[a-fA-F0-9]|bc1|[13][a-km-zA-HJ-NP-Z])[^}]*?clipboard\.(writeText|write)',
+                'severity': 'critical',
+                'description': 'Reads clipboard, checks for wallet address, replaces with attacker address - CLIPBOARD HIJACKING',
+                'technique': 'Clipboard hijacking'
+            },
+            {
+                'name': 'Ethereum Address Regex',
+                'pattern': r'(match|test|exec)\s*\(\s*/\^?0x\[a-fA-F0-9\]\{40\}',
+                'severity': 'high',
+                'description': 'Regex matching Ethereum addresses - may be wallet address targeting',
+                'technique': 'Crypto targeting'
+            },
+            {
+                'name': 'Bitcoin Address Regex',
+                'pattern': r'(match|test|exec)\s*\(\s*/\^?\[13\]\[a-km-zA-HJ-NP-Z|bc1\[a-z0-9\]',
+                'severity': 'high',
+                'description': 'Regex matching Bitcoin addresses - may be wallet address targeting',
+                'technique': 'Crypto targeting'
+            },
+            {
+                'name': 'Mnemonic Seed Phrase Detection',
+                'pattern': r'(seed|mnemonic|phrase|recovery|backup)\s*[:=]\s*["\'][a-z]+(\s+[a-z]+){11,23}["\']',
+                'severity': 'critical',
+                'description': 'Accesses or stores wallet recovery seed phrase - CRITICAL THEFT INDICATOR',
+                'technique': 'Seed phrase theft'
+            },
+            {
+                'name': 'Private Key Hex String',
+                'pattern': r'(privateKey|private_key|privkey|secret)\s*[:=]\s*["\'][0-9a-fA-F]{64}["\']',
+                'severity': 'critical',
+                'description': 'Contains or assigns 64-char hex string as private key - PRIVATE KEY THEFT',
+                'technique': 'Private key theft'
+            },
+            {
+                'name': 'Token Approval Injection',
+                'pattern': r'approve\s*\([^)]*(?:MAX_UINT|ffffffff|unlimited|0x[fF]+)',
+                'severity': 'critical',
+                'description': 'Injects unlimited token approval to drain wallet - APPROVE ATTACK',
+                'technique': 'Token drain'
+            },
+            {
+                'name': 'Eth Sign Phishing',
+                'pattern': r'eth_sign[^}]*?(input|value|document\.|password)',
+                'severity': 'critical',
+                'description': 'Requests eth_sign with user input - allows signing arbitrary transactions',
+                'technique': 'Signature phishing'
+            },
+            {
+                'name': 'MetaMask Phishing',
+                'pattern': r'metamask\.io[^}]*?(login|connect|unlock|password)|metamask[^}]*?phish',
+                'severity': 'critical',
+                'description': 'Attempts to phish MetaMask credentials or impersonate MetaMask',
+                'technique': 'Wallet phishing'
+            },
+            # ========== ADVANCED OBFUSCATION DETECTION ==========
+            {
+                'name': 'Eval via Bracket Concatenation',
+                'pattern': r'(window|this|self)\s*\[\s*["\'][^"\']+["\']\s*\+\s*["\'][^"\']+["\']\s*\]',
+                'severity': 'critical',
+                'description': 'Invokes eval via bracket notation with string concatenation (window["ev"+"al"]) - EVASION TECHNIQUE',
+                'technique': 'Eval bypass'
+            },
+            {
+                'name': 'Constructor Chain Bypass',
+                'pattern': r'\[\s*["\']constructor["\']\s*\]\s*\[\s*["\']constructor["\']\s*\]',
+                'severity': 'critical',
+                'description': 'Uses constructor chain to execute arbitrary code - ADVANCED EVASION',
+                'technique': 'Constructor bypass'
+            },
+            {
+                'name': 'Debugger Anti-Analysis Loop',
+                'pattern': r'(while|for)\s*\([^)]*\)\s*\{[^}]*debugger[^}]*\}|setInterval\s*\([^)]*debugger',
+                'severity': 'high',
+                'description': 'Debugger statements in loops to prevent analysis - ANTI-DEBUGGING',
+                'technique': 'Anti-debugging'
+            },
+            {
+                'name': 'String Array Rotation Obfuscation',
+                'pattern': r'var\s+\w+\s*=\s*\[[^\]]{500,}\][^;]*;[^}]*(shift|push|splice)',
+                'severity': 'high',
+                'description': 'Large string array with rotation function - JAVASCRIPT OBFUSCATOR signature',
+                'technique': 'Code obfuscation'
+            },
+            {
+                'name': 'Unicode Escape Obfuscation',
+                'pattern': r'\\u[0-9a-fA-F]{4}\\u[0-9a-fA-F]{4}\\u[0-9a-fA-F]{4}',
+                'severity': 'medium',
+                'description': 'Heavy use of Unicode escape sequences to hide code',
+                'technique': 'String obfuscation'
+            },
+            {
+                'name': 'Computed Property Chains',
+                'pattern': r'\[["\'][^"\']+["\']\]\s*\[["\'][^"\']+["\']\]\s*\[["\'][^"\']+["\']\]',
+                'severity': 'high',
+                'description': 'Multiple computed property accesses in chain - obfuscation technique',
+                'technique': 'Bracket notation obfuscation'
+            },
+            # ========== PHISHING & UI HIJACKING ==========
+            {
+                'name': 'Fullscreen Iframe Overlay',
+                'pattern': r'createElement\s*\(["\']iframe["\']\)[^}]*?(100vh|100vw|position\s*:\s*fixed|z-index\s*:\s*\d{4,})',
+                'severity': 'critical',
+                'description': 'Creates fullscreen iframe overlay for phishing/clickjacking - UI HIJACKING',
+                'technique': 'Overlay attack'
+            },
+            {
+                'name': 'Password Field to Background Script',
+                'pattern': r'input\[type=["\']?password[^}]*?chrome\.runtime\.sendMessage',
+                'severity': 'critical',
+                'description': 'Sends password field data to background script - CREDENTIAL THEFT',
+                'technique': 'Password exfiltration'
+            },
+            {
+                'name': 'Fake Login Form Injection',
+                'pattern': r'innerHTML\s*=[^}]*?(login|signin|password|credential)[^}]*?form',
+                'severity': 'critical',
+                'description': 'Injects fake login form into page - PHISHING ATTACK',
+                'technique': 'Form injection'
+            },
+            {
+                'name': 'Extension UI Element Hiding',
+                'pattern': r'(remove|uninstall|disable)[^}]*?(display\s*:\s*none|visibility\s*:\s*hidden)',
+                'severity': 'high',
+                'description': 'Hides extension management UI elements - prevents user from uninstalling',
+                'technique': 'UI manipulation'
+            },
+            {
+                'name': 'Chrome Extensions Page Manipulation',
+                'pattern': r'chrome://extensions[^}]*?(insertCSS|style|remove|hide)',
+                'severity': 'critical',
+                'description': 'Attempts to manipulate chrome://extensions page - SEVERE ABUSE',
+                'technique': 'Extension page tampering'
+            },
+            {
+                'name': 'Bank URL Detection',
+                'pattern': r'(location\.href|window\.location|document\.URL)[^}]*?(bank|chase|wellsfargo|bankofamerica|citibank|paypal)',
+                'severity': 'high',
+                'description': 'Code detects banking website URLs - may trigger credential theft on bank sites',
+                'technique': 'Banking target detection'
+            },
+            {
+                'name': 'Crypto Exchange URL Detection',
+                'pattern': r'(location\.href|window\.location|document\.URL)[^}]*?(binance|coinbase|kraken|crypto\.com|gemini|ftx)',
+                'severity': 'high',
+                'description': 'Code detects crypto exchange URLs - may trigger wallet/API key theft',
+                'technique': 'Crypto exchange targeting'
+            },
+            # ========== NETWORK SECURITY TAMPERING ==========
+            {
+                'name': 'X-Frame-Options Removal',
+                'pattern': r'x-frame-options[^}]*?(remove|delete|null)',
+                'severity': 'critical',
+                'description': 'Removes X-Frame-Options header - enables clickjacking attacks',
+                'technique': 'Security header removal'
+            },
+            {
+                'name': 'Security URL Blocking',
+                'pattern': r'(virustotal|safebrowsing|malwarebytes|kaspersky|norton)[^}]*?(cancel|block|redirect)',
+                'severity': 'critical',
+                'description': 'Blocks access to security/antivirus websites - DEFENSE EVASION',
+                'technique': 'Security site blocking'
+            },
+            {
+                'name': 'Proxy Server Configuration',
+                'pattern': r'chrome\.proxy\.settings\.set|proxyType\s*:\s*["\']fixed_servers["\']',
+                'severity': 'critical',
+                'description': 'Modifies Chrome proxy settings - can route all traffic through attacker server',
+                'technique': 'Proxy hijacking'
+            },
+            {
+                'name': 'DNS Override Attempt',
+                'pattern': r'dns\s*[:=]\s*["\'][0-9]+\.[0-9]+|chrome\.dns|webRequest[^}]*?dns',
+                'severity': 'high',
+                'description': 'Attempts to modify or intercept DNS - traffic hijacking indicator',
+                'technique': 'DNS manipulation'
+            },
+            {
+                'name': 'Certificate Pinning Bypass',
+                'pattern': r'certificateTransparency|publicKeyPinning|HPKP|pinning\s*:\s*false',
+                'severity': 'high',
+                'description': 'Attempts to bypass certificate pinning - enables MITM attacks',
+                'technique': 'Certificate bypass'
+            },
+            # ========== STEGANOGRAPHY & ADVANCED HIDING ==========
+            {
+                'name': 'Image Data Extraction',
+                'pattern': r'getImageData\s*\([^)]*\)[^}]*?(charCodeAt|fromCharCode|String\.|data\[)',
+                'severity': 'high',
+                'description': 'Extracts data from image pixels - STEGANOGRAPHY technique to hide code in images',
+                'technique': 'Steganography'
+            },
+            {
+                'name': 'Canvas Hidden Data',
+                'pattern': r'canvas[^}]*?(getImageData|putImageData)[^}]*?(decode|decrypt|parse|eval)',
+                'severity': 'high',
+                'description': 'Uses canvas to hide/extract data - steganographic payload delivery',
+                'technique': 'Canvas steganography'
+            },
+            {
+                'name': 'Comment-Based Code Hiding',
+                'pattern': r'/\*[^*]*\*/.{0,50}(eval|Function|atob)\s*\(',
+                'severity': 'high',
+                'description': 'Code execution near multi-line comments - may extract code from comments',
+                'technique': 'Comment obfuscation'
+            },
         ]
 
         # PRE-COMPILE all regex patterns for better performance

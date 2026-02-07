@@ -17,6 +17,8 @@ from pii_classifier import PIIClassifier
 from ioc_manager import IOCManager
 from advanced_detection import AdvancedDetector
 from store_metadata import StoreMetadata
+from enhanced_detection import EnhancedDetectionEngine, WalletHijackDetector, PhishingDetector
+from taint_analyzer import TaintAnalyzer
 from threat_attribution import ThreatAttribution
 from false_positive_filter import FalsePositiveFilter
 from host_permissions_analyzer import HostPermissionsAnalyzer
@@ -45,6 +47,10 @@ class ChromeExtensionAnalyzer:
         self.false_positive_filter = FalsePositiveFilter()
         self.host_permissions_analyzer = HostPermissionsAnalyzer()
         self.network_capture = NetworkCaptureAnalyzer() if NETWORK_CAPTURE_AVAILABLE else None
+        self.enhanced_detector = EnhancedDetectionEngine()
+        self.taint_analyzer = TaintAnalyzer()
+        self.wallet_detector = WalletHijackDetector()
+        self.phishing_detector = PhishingDetector()
     
     def analyze_extension(self, extension_id):
         """
@@ -285,6 +291,37 @@ class ChromeExtensionAnalyzer:
         else:
             print("[[OK]] No advanced malware techniques detected")
 
+        # Step 6.5: Enhanced Detection (Taint Analysis, Crypto Theft, Phishing)
+        print("\n[ENHANCED] STEP 6.5: Enhanced detection (taint analysis, crypto, phishing)...")
+        print("-" * 80)
+        enhanced_results = self._run_enhanced_detection(extension_dir)
+        results['enhanced_detection'] = enhanced_results
+
+        # Update risk based on enhanced detection findings
+        summary = enhanced_results.get('summary', {})
+        if summary.get('critical', 0) > 0:
+            results['risk_score'] = min(10.0, results['risk_score'] + 3.0)
+            print(f"[!] CRITICAL: {summary['critical']} critical finding(s) from enhanced detection!")
+        elif summary.get('high', 0) > 0:
+            results['risk_score'] = min(10.0, results['risk_score'] + 1.5)
+            print(f"[!] HIGH: {summary['high']} high-risk finding(s)")
+        else:
+            print("[[OK]] No additional threats from enhanced detection")
+
+        # Print taint flow summary if any
+        taint_flows = enhanced_results.get('taint_flows', [])
+        if taint_flows:
+            print(f"[!] TAINT: {len(taint_flows)} data flow(s) from sensitive sources to network sinks")
+            for flow in taint_flows[:3]:
+                src = flow.get('source', {})
+                sink = flow.get('sink', {})
+                print(f"    -> {src.get('api', 'Unknown')} -> {sink.get('function', 'Unknown')}")
+
+        # Print crypto findings
+        crypto_findings = enhanced_results.get('crypto_findings', [])
+        if crypto_findings:
+            print(f"[!] CRYPTO: {len(crypto_findings)} cryptocurrency-related pattern(s) detected")
+
         # Step 7: PII/Data Classification
         print("\n[PII] STEP 7: PII/data classification...")
         print("-" * 80)
@@ -468,7 +505,82 @@ class ChromeExtensionAnalyzer:
                 print(f"    • {result['domain']} - {result['stats']['suspicious']} flags")
         
         return vt_results
-    
+
+    def _run_enhanced_detection(self, extension_dir):
+        """
+        Run enhanced detection including taint analysis, crypto theft, and phishing detection.
+
+        Returns:
+            dict: Enhanced detection results with taint flows, crypto findings, etc.
+        """
+        from pathlib import Path
+        extension_dir = Path(extension_dir)
+
+        results = {
+            'taint_flows': [],
+            'crypto_findings': [],
+            'phishing_findings': [],
+            'wallet_hijack': [],
+            'obfuscation': [],
+            'sensitive_data': [],
+            'summary': {
+                'critical': 0,
+                'high': 0,
+                'medium': 0,
+                'low': 0,
+                'total': 0
+            }
+        }
+
+        js_files = list(extension_dir.rglob('*.js'))
+
+        for js_file in js_files:
+            try:
+                with open(js_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+
+                relative_path = str(js_file.relative_to(extension_dir))
+
+                # 1. Taint analysis
+                taint_results = self.taint_analyzer.analyze_file(relative_path, content)
+                results['taint_flows'].extend(taint_results)
+
+                # 2. Wallet hijack detection
+                wallet_findings = self.wallet_detector.analyze(content, relative_path)
+                results['wallet_hijack'].extend(wallet_findings)
+
+                # 3. Phishing detection
+                phishing_findings = self.phishing_detector.analyze(content, relative_path)
+                results['phishing_findings'].extend(phishing_findings)
+
+            except Exception as e:
+                continue
+
+        # Calculate summary
+        all_findings = (
+            results['taint_flows'] +
+            results['wallet_hijack'] +
+            results['phishing_findings']
+        )
+
+        results['summary']['total'] = len(all_findings)
+
+        for finding in all_findings:
+            severity = finding.get('severity', 'medium').lower()
+            if severity == 'critical':
+                results['summary']['critical'] += 1
+            elif severity == 'high':
+                results['summary']['high'] += 1
+            elif severity == 'medium':
+                results['summary']['medium'] += 1
+            else:
+                results['summary']['low'] += 1
+
+        # Also add wallet hijack to crypto_findings for report
+        results['crypto_findings'] = results['wallet_hijack']
+
+        return results
+
     def _print_analysis_summary(self, results):
         """Print analysis summary"""
         

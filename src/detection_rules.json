@@ -1,0 +1,435 @@
+{
+  "version": "2.0.0",
+  "description": "Chrome Extension Security Analyzer - Detection Rules Schema",
+  "last_updated": "2026-02-07",
+  "categories": {
+    "OBFUSCATION": "Code hiding and anti-analysis techniques",
+    "DATA_EXFIL": "Data exfiltration and privacy theft",
+    "NETWORK_TAMPER": "Network and security tampering",
+    "CRYPTO_THEFT": "Cryptocurrency and financial theft",
+    "PHISHING": "Phishing and UI hijacking",
+    "C2_COMM": "Command and control communication",
+    "FINGERPRINT": "Browser fingerprinting and tracking",
+    "INJECTION": "Code and script injection"
+  },
+  "severity_levels": {
+    "critical": {"score": 10, "description": "Confirmed malware behavior"},
+    "high": {"score": 7, "description": "Likely malicious, requires immediate review"},
+    "medium": {"score": 4, "description": "Suspicious, needs investigation"},
+    "low": {"score": 2, "description": "Informational, context-dependent"}
+  },
+  "rules": [
+    {
+      "id": "OBF-001",
+      "name": "Eval via String Concatenation",
+      "category": "OBFUSCATION",
+      "severity": "critical",
+      "description": "Detects eval() invoked via bracket notation with string concatenation to evade static analysis",
+      "ast_pattern": {
+        "node_type": "CallExpression",
+        "callee": {
+          "type": "MemberExpression",
+          "computed": true,
+          "property": {
+            "type": "BinaryExpression",
+            "operator": "+",
+            "contains_strings": ["ev", "al"]
+          }
+        }
+      },
+      "regex": "window\\s*\\[\\s*['\"][^'\"]*['\"]\\s*\\+\\s*['\"][^'\"]*['\"]\\s*\\]\\s*\\(",
+      "examples": ["window['ev' + 'al']('code')", "this['e'+'val']"],
+      "mitre_attack": "T1027.010"
+    },
+    {
+      "id": "OBF-002",
+      "name": "String Array Rotation",
+      "category": "OBFUSCATION",
+      "severity": "high",
+      "description": "Detects obfuscator pattern with string array and rotation function",
+      "ast_pattern": {
+        "sequence": [
+          {"type": "VariableDeclaration", "init_type": "ArrayExpression", "min_elements": 10},
+          {"type": "FunctionDeclaration", "body_contains": ["shift", "push"]}
+        ]
+      },
+      "regex": "var\\s+\\w+\\s*=\\s*\\[[^\\]]{200,}\\][\\s\\S]{0,500}(shift|push|splice)",
+      "examples": ["var _0x1234 = ['string1', 'string2'...]; function rotate()..."],
+      "mitre_attack": "T1027"
+    },
+    {
+      "id": "OBF-003",
+      "name": "Debugger Statement Injection",
+      "category": "OBFUSCATION",
+      "severity": "high",
+      "description": "Anti-debugging technique using debugger statements in loops",
+      "ast_pattern": {
+        "node_type": "WhileStatement",
+        "body_contains": {"type": "DebuggerStatement"}
+      },
+      "regex": "(while|for)\\s*\\([^)]*\\)\\s*\\{[^}]*debugger[^}]*\\}|setInterval\\([^)]*debugger",
+      "examples": ["while(true){debugger;}", "setInterval(function(){debugger},100)"],
+      "mitre_attack": "T1622"
+    },
+    {
+      "id": "OBF-004",
+      "name": "High-Entropy String Literal",
+      "category": "OBFUSCATION",
+      "severity": "medium",
+      "description": "Long strings with high entropy suggesting encoded/encrypted payloads",
+      "entropy_check": {
+        "min_length": 100,
+        "min_entropy": 4.5
+      },
+      "regex": "['\"][A-Za-z0-9+/=]{100,}['\"]|['\"][0-9a-fA-F]{100,}['\"]",
+      "mitre_attack": "T1027.001"
+    },
+    {
+      "id": "OBF-005",
+      "name": "Dynamic String.fromCharCode",
+      "category": "OBFUSCATION",
+      "severity": "high",
+      "description": "String.fromCharCode with non-static numeric arguments",
+      "ast_pattern": {
+        "node_type": "CallExpression",
+        "callee": "String.fromCharCode",
+        "arguments": {"type": "not_literal"}
+      },
+      "regex": "String\\.fromCharCode\\s*\\([^)]*[a-zA-Z_$][^)]*\\)",
+      "examples": ["String.fromCharCode(arr[i])", "String.fromCharCode.apply(null, encoded)"],
+      "mitre_attack": "T1140"
+    },
+    {
+      "id": "OBF-006",
+      "name": "Constructor Bypass Pattern",
+      "category": "OBFUSCATION",
+      "severity": "critical",
+      "description": "Using constructor property to execute arbitrary code",
+      "regex": "\\[\\s*['\"]constructor['\"]\\s*\\]\\s*\\[\\s*['\"]constructor['\"]\\s*\\]|\\(\\s*\\)\\s*\\[\\s*['\"]constructor['\"]\\s*\\]",
+      "examples": ["[].constructor.constructor('return this')()"],
+      "mitre_attack": "T1059.007"
+    },
+    {
+      "id": "EXFIL-001",
+      "name": "Cookie to Network Sink Taint Flow",
+      "category": "DATA_EXFIL",
+      "severity": "critical",
+      "description": "Cookies accessed via Chrome API flow to network request",
+      "taint_rule": {
+        "sources": ["chrome.cookies.getAll", "chrome.cookies.get"],
+        "sinks": ["fetch", "XMLHttpRequest", "sendBeacon", "WebSocket"],
+        "max_distance": 50
+      },
+      "mitre_attack": "T1539"
+    },
+    {
+      "id": "EXFIL-002",
+      "name": "History Exfiltration",
+      "category": "DATA_EXFIL",
+      "severity": "high",
+      "description": "Browsing history accessed and sent to external server",
+      "taint_rule": {
+        "sources": ["chrome.history.search", "chrome.history.getVisits"],
+        "sinks": ["fetch", "XMLHttpRequest", "sendBeacon"],
+        "check_external_domain": true
+      },
+      "mitre_attack": "T1217"
+    },
+    {
+      "id": "EXFIL-003",
+      "name": "Screenshot Loop Capture",
+      "category": "DATA_EXFIL",
+      "severity": "critical",
+      "description": "captureVisibleTab used in a loop or with setInterval",
+      "regex": "(setInterval|setTimeout|while|for)\\s*\\([^)]*[\\s\\S]{0,200}captureVisibleTab|captureVisibleTab[\\s\\S]{0,200}(setInterval|setTimeout)",
+      "mitre_attack": "T1113"
+    },
+    {
+      "id": "EXFIL-004",
+      "name": "Tab URL Scraping on Update",
+      "category": "DATA_EXFIL",
+      "severity": "high",
+      "description": "Background script monitors tabs.onUpdated to scrape URLs",
+      "ast_pattern": {
+        "sequence": [
+          {"type": "CallExpression", "callee": "chrome.tabs.onUpdated.addListener"},
+          {"body_contains": {"type": "MemberExpression", "property": "url"}}
+        ]
+      },
+      "regex": "chrome\\.tabs\\.onUpdated\\.addListener[\\s\\S]{0,500}(tab\\.url|changeInfo\\.url)[\\s\\S]{0,300}(fetch|sendMessage|XMLHttpRequest)",
+      "mitre_attack": "T1185"
+    },
+    {
+      "id": "EXFIL-005",
+      "name": "Profile Email Exfiltration",
+      "category": "DATA_EXFIL",
+      "severity": "high",
+      "description": "Chrome identity API used to get user email which is then sent externally",
+      "taint_rule": {
+        "sources": ["chrome.identity.getProfileUserInfo"],
+        "sinks": ["fetch", "XMLHttpRequest", "sendBeacon"],
+        "track_properties": ["email", "id"]
+      },
+      "mitre_attack": "T1589.002"
+    },
+    {
+      "id": "NET-001",
+      "name": "CSP Header Removal",
+      "category": "NETWORK_TAMPER",
+      "severity": "critical",
+      "description": "Removes Content-Security-Policy header to enable code injection",
+      "regex": "(content-security-policy|x-frame-options)[\\s\\S]{0,100}(remove|operation.*remove)|removeResponseHeaders[\\s\\S]{0,100}(csp|content-security)",
+      "mitre_attack": "T1562.001"
+    },
+    {
+      "id": "NET-002",
+      "name": "Non-Internal Redirect",
+      "category": "NETWORK_TAMPER",
+      "severity": "high",
+      "description": "webRequest redirects to external (non-Google/non-internal) domains",
+      "ast_pattern": {
+        "node_type": "ReturnStatement",
+        "contains": {
+          "type": "ObjectExpression",
+          "properties": [{"key": "redirectUrl", "value_pattern": "https?://(?!.*google\\.com).*"}]
+        }
+      },
+      "regex": "redirectUrl\\s*:\\s*['\"]https?://(?!.*(google|googleapis|gstatic))[^'\"]+['\"]",
+      "mitre_attack": "T1557"
+    },
+    {
+      "id": "NET-003",
+      "name": "Security URL Blocking",
+      "category": "NETWORK_TAMPER",
+      "severity": "critical",
+      "description": "Blocks access to security-related URLs (VirusTotal, SafeBrowsing)",
+      "regex": "(virustotal|safebrowsing|malwarebytes|kaspersky|avast|norton|mcafee|sophos)\\.com[\\s\\S]{0,100}(cancel|block|redirectUrl|return\\s*\\{)",
+      "mitre_attack": "T1562.001"
+    },
+    {
+      "id": "NET-004",
+      "name": "Proxy Settings Manipulation",
+      "category": "NETWORK_TAMPER",
+      "severity": "critical",
+      "description": "Modifies Chrome proxy settings to route traffic through attacker server",
+      "regex": "chrome\\.proxy\\.settings\\.set|proxyType\\s*:\\s*['\"]fixed_servers['\"]|singleProxy\\s*:\\s*\\{",
+      "mitre_attack": "T1090"
+    },
+    {
+      "id": "CRYPTO-001",
+      "name": "Wallet Object Override",
+      "category": "CRYPTO_THEFT",
+      "severity": "critical",
+      "description": "Overrides window.ethereum or window.solana to intercept transactions",
+      "ast_pattern": {
+        "node_type": "AssignmentExpression",
+        "left": {
+          "type": "MemberExpression",
+          "object": "window",
+          "property": {"oneOf": ["ethereum", "solana", "phantom", "web3"]}
+        }
+      },
+      "regex": "window\\s*\\.\\s*(ethereum|solana|phantom|web3)\\s*=|Object\\.defineProperty\\s*\\([^)]*['\"]ethereum['\"]",
+      "mitre_attack": "T1565.002"
+    },
+    {
+      "id": "CRYPTO-002",
+      "name": "BIP39 Mnemonic Regex Detection",
+      "category": "CRYPTO_THEFT",
+      "severity": "critical",
+      "description": "Regex pattern matching 12/24 word recovery seed phrases",
+      "regex_library": "MNEMONIC_SEED",
+      "context_patterns": ["(mnemonic|seed|phrase|recovery|backup)"],
+      "mitre_attack": "T1552.001"
+    },
+    {
+      "id": "CRYPTO-003",
+      "name": "Wallet Address Regex",
+      "category": "CRYPTO_THEFT",
+      "severity": "high",
+      "description": "Regex patterns detecting cryptocurrency addresses (ETH, BTC, SOL)",
+      "regex_library": "WALLET_ADDRESS",
+      "mitre_attack": "T1552.001"
+    },
+    {
+      "id": "CRYPTO-004",
+      "name": "Private Key Detection",
+      "category": "CRYPTO_THEFT",
+      "severity": "critical",
+      "description": "64-character hex strings that could be private keys",
+      "regex": "['\"][0-9a-fA-F]{64}['\"]|privateKey\\s*[=:]\\s*['\"][^'\"]+['\"]",
+      "context_patterns": ["private", "key", "secret", "hex"],
+      "mitre_attack": "T1552.004"
+    },
+    {
+      "id": "CRYPTO-005",
+      "name": "Clipboard Wallet Hijack",
+      "category": "CRYPTO_THEFT",
+      "severity": "critical",
+      "description": "Reads clipboard, checks for wallet address, writes attacker address",
+      "ast_pattern": {
+        "sequence": [
+          {"type": "CallExpression", "callee": "navigator.clipboard.readText"},
+          {"type": "CallExpression", "callee": {"match": "test|match|includes"}},
+          {"type": "CallExpression", "callee": "navigator.clipboard.writeText"}
+        ]
+      },
+      "regex": "clipboard\\.readText[\\s\\S]{0,500}(0x[a-fA-F0-9]|bc1|[13][a-km-zA-HJ-NP-Z1-9])[\\s\\S]{0,300}clipboard\\.writeText",
+      "mitre_attack": "T1115"
+    },
+    {
+      "id": "CRYPTO-006",
+      "name": "Ethereum Approve Call Injection",
+      "category": "CRYPTO_THEFT",
+      "severity": "critical",
+      "description": "Injects approve(spender, amount) calls to drain wallets",
+      "regex": "approve\\s*\\([\\s\\S]{0,50}(0x[a-fA-F0-9]{40}|spender)[\\s\\S]{0,50}(amount|MAX_UINT|ffffffff)",
+      "mitre_attack": "T1565.002"
+    },
+    {
+      "id": "PHISH-001",
+      "name": "Fullscreen Iframe Overlay",
+      "category": "PHISHING",
+      "severity": "critical",
+      "description": "Creates iframe with fullscreen styles to overlay legitimate content",
+      "ast_pattern": {
+        "sequence": [
+          {"type": "CallExpression", "callee": "document.createElement", "arguments": ["iframe"]},
+          {"body_contains": {"type": "AssignmentExpression", "left": "style", "right_contains": ["100vh", "100vw", "100%"]}}
+        ]
+      },
+      "regex": "createElement\\s*\\(['\"]iframe['\"]\\)[\\s\\S]{0,500}(100vh|100vw|position\\s*:\\s*fixed|z-index\\s*:\\s*\\d{5,})",
+      "mitre_attack": "T1185"
+    },
+    {
+      "id": "PHISH-002",
+      "name": "Password Field Event Forwarding",
+      "category": "PHISHING",
+      "severity": "critical",
+      "description": "Event listener on password fields that forwards to background script",
+      "taint_rule": {
+        "sources": ["input[type=password]", "querySelector('input[type=\"password\"]')"],
+        "sinks": ["chrome.runtime.sendMessage", "postMessage"],
+        "events": ["input", "change", "keyup", "blur"]
+      },
+      "regex": "input\\[type=['\"]?password[\\s\\S]{0,200}addEventListener[\\s\\S]{0,200}(sendMessage|postMessage)",
+      "mitre_attack": "T1056.001"
+    },
+    {
+      "id": "PHISH-003",
+      "name": "Uninstall Button Hiding",
+      "category": "PHISHING",
+      "severity": "high",
+      "description": "CSS injection to hide extension uninstall/remove buttons",
+      "regex": "(remove|uninstall|disable)[\\s\\S]{0,50}(display\\s*:\\s*none|visibility\\s*:\\s*hidden)|insertCSS[\\s\\S]{0,200}(chrome://extensions|extensions-manager)",
+      "mitre_attack": "T1564.001"
+    },
+    {
+      "id": "C2-001",
+      "name": "High-Risk TLD WebSocket",
+      "category": "C2_COMM",
+      "severity": "high",
+      "description": "WebSocket connection to high-risk TLDs (.xyz, .top, etc.)",
+      "regex": "new\\s+WebSocket\\s*\\(['\"][^'\"]*\\.(xyz|top|club|work|site|online|pw|tk|ml|ga)['\"/]",
+      "mitre_attack": "T1071.001"
+    },
+    {
+      "id": "C2-002",
+      "name": "Non-Standard Port Connection",
+      "category": "C2_COMM",
+      "severity": "medium",
+      "description": "Connections to non-standard ports (not 80, 443, 8080)",
+      "regex": "(WebSocket|fetch|XMLHttpRequest)[\\s\\S]{0,100}:\\d{4,5}(?!/|['\"])",
+      "port_exclusions": [80, 443, 8080, 8443, 3000, 5000],
+      "mitre_attack": "T1571"
+    },
+    {
+      "id": "C2-003",
+      "name": "Dynamic URL Construction",
+      "category": "C2_COMM",
+      "severity": "high",
+      "description": "URL constructed from multiple variables/arrays to hide C2 domain",
+      "regex": "\\[\\s*['\"]https?['\"]\\s*,\\s*['\"]://['\"]\\s*\\]\\.join|atob\\s*\\([^)]+\\)\\s*\\+\\s*['\"]://",
+      "mitre_attack": "T1027"
+    },
+    {
+      "id": "C2-004",
+      "name": "Heartbeat Check-in Pattern",
+      "category": "C2_COMM",
+      "severity": "high",
+      "description": "Periodic network requests suggesting C2 heartbeat",
+      "regex": "(setInterval|chrome\\.alarms)[\\s\\S]{0,300}(fetch|XMLHttpRequest|sendBeacon)[\\s\\S]{0,100}(status|ping|heartbeat|alive|checkin)",
+      "mitre_attack": "T1071.001"
+    },
+    {
+      "id": "INJECT-001",
+      "name": "Remote Script via src Assignment",
+      "category": "INJECTION",
+      "severity": "critical",
+      "description": "Creates script element and assigns external src",
+      "ast_pattern": {
+        "sequence": [
+          {"type": "CallExpression", "callee": "document.createElement", "arguments": ["script"]},
+          {"type": "AssignmentExpression", "left": {"property": "src"}, "right": {"starts_with": "http"}}
+        ]
+      },
+      "regex": "createElement\\s*\\(['\"]script['\"]\\)[\\s\\S]{0,100}\\.src\\s*=\\s*['\"]https?://",
+      "mitre_attack": "T1059.007"
+    },
+    {
+      "id": "INJECT-002",
+      "name": "Eval from Remote Source",
+      "category": "INJECTION",
+      "severity": "critical",
+      "description": "Fetches remote content and passes to eval/Function",
+      "regex": "fetch\\s*\\([^)]+\\)[\\s\\S]{0,200}(eval|Function|new\\s+Function)\\s*\\(",
+      "mitre_attack": "T1059.007"
+    }
+  ],
+  "regex_library": {
+    "MNEMONIC_SEED": {
+      "12_word": "\\b([a-z]+\\s+){11}[a-z]+\\b",
+      "24_word": "\\b([a-z]+\\s+){23}[a-z]+\\b",
+      "bip39_context": "(seed|mnemonic|phrase|recovery|backup|wallet)\\s*[:=]?\\s*['\"]([a-z]+\\s+){11,23}[a-z]+['\"]"
+    },
+    "WALLET_ADDRESS": {
+      "ethereum": "0x[a-fA-F0-9]{40}",
+      "bitcoin_legacy": "[13][a-km-zA-HJ-NP-Z1-9]{25,34}",
+      "bitcoin_segwit": "bc1[ac-hj-np-z02-9]{39,59}",
+      "solana": "[1-9A-HJ-NP-Za-km-z]{32,44}",
+      "monero": "4[0-9AB][1-9A-HJ-NP-Za-km-z]{93}"
+    },
+    "PRIVATE_KEY": {
+      "hex_64": "[0-9a-fA-F]{64}",
+      "wif": "5[HJK][1-9A-HJ-NP-Za-km-z]{49}",
+      "ethereum_keystore": "\\{[^}]*cipher[^}]*ciphertext[^}]*\\}"
+    },
+    "API_KEYS": {
+      "generic": "(api[_-]?key|apikey|api[_-]?secret)\\s*[:=]\\s*['\"][a-zA-Z0-9_-]{20,}['\"]",
+      "aws": "AKIA[0-9A-Z]{16}",
+      "stripe": "(sk|pk)_(test|live)_[0-9a-zA-Z]{24,}",
+      "github": "gh[pousr]_[A-Za-z0-9_]{36,}",
+      "google": "AIza[0-9A-Za-z_-]{35}"
+    },
+    "JWT": {
+      "pattern": "eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"
+    },
+    "CREDIT_CARD": {
+      "visa": "4[0-9]{12}(?:[0-9]{3})?",
+      "mastercard": "5[1-5][0-9]{14}|2[2-7][0-9]{14}",
+      "amex": "3[47][0-9]{13}",
+      "discover": "6(?:011|5[0-9]{2})[0-9]{12}",
+      "generic": "\\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\\b"
+    },
+    "SSN": {
+      "pattern": "\\b\\d{3}-\\d{2}-\\d{4}\\b|\\b\\d{9}\\b"
+    },
+    "EMAIL": {
+      "pattern": "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+    },
+    "IP_ADDRESS": {
+      "ipv4": "\\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\b",
+      "ipv6": "(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}"
+    }
+  }
+}

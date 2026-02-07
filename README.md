@@ -1,53 +1,93 @@
 # Chrome Extension Security Analyzer
 
-A professional-grade static analysis tool for detecting malicious Chrome extensions. Performs deep code analysis, permission auditing, threat intelligence correlation, and generates incident response-ready reports.
+> **Detect malicious Chrome extensions before they steal your data.**
 
-## Features
+Browser extensions have full access to your passwords, cookies, and browsing history. Malicious ones exploit this to steal credentials, hijack crypto wallets, and spy on users. This tool catches them.
 
-- **Multi-stage Analysis Pipeline**: Downloads, unpacks, and analyzes extensions automatically
-- **70+ Malicious Code Patterns**: Detects keyloggers, screen capture, data theft, C2 communication, and more
-- **JavaScript AST Analysis**: Resolves config variables to extract exact data exfiltration destinations
-- **VirusTotal Integration**: Checks all domains against 90+ security vendors with intelligent caching
-- **Threat Campaign Attribution**: Cross-references extensions against known malware campaigns via OSINT
-- **PII Classification**: Identifies what sensitive data is being accessed (credentials, cookies, financial data)
-- **Advanced Malware Detection**: Detects CSP manipulation, DOM event injection, WebSocket C2, time bombs
-- **Permission Risk Analysis**: Flags dangerous permission combinations with security implications
-- **Dynamic Network Capture**: Playwright + CDP-based runtime traffic analysis with WebSocket detection
-- **False Positive Suppression**: Filters benign libraries (jQuery, Firebase, React) to reduce noise
-- **Professional HTML Reports**: Dark-themed threat intelligence reports with code evidence
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![GitHub stars](https://img.shields.io/github/stars/debarshi17/chrome-extension-security-analyzer?style=social)](https://github.com/debarshi17/chrome-extension-security-analyzer/stargazers)
 
-## Installation
+---
+
+## Demo
+
+Analyze any Chrome extension in seconds:
 
 ```bash
-# Clone and install
-git clone https://github.com/debarshi17/chrome-extension-security-analyzer.git
-cd chrome-extension-security-analyzer
-pip install -r requirements.txt
-
-# Add your VirusTotal API key
-cp config.json.template config.json
-# Edit config.json with your key
+python src/analyzer.py nkbihfbeogaeaoehlefnkodbefgpgknn
 ```
 
-Get a free VirusTotal API key at https://www.virustotal.com/gui/join-us
+**Output:**
+```
+[SCAN] CHROME EXTENSION SECURITY ANALYZER
+================================================================================
 
-## Usage
+[+] Extension: MetaMask
+[+] Risk Score: 3.2/10 (LOW)
+
+[ENHANCED] STEP 6.5: Enhanced detection (taint analysis, crypto, phishing)...
+[!] TAINT: 2 data flow(s) from sensitive sources to network sinks
+    -> chrome.storage.local.get -> fetch
+    -> window.ethereum -> sendMessage
+
+[REPORT] Reports generated:
+   • HTML Report: reports/nkbihfbeogaeaoehlefnkodbefgpgknn_threat_analysis_report.html
+```
+
+### Report Screenshots
+
+<p align="center">
+  <img width="90%" alt="Threat Analysis Report" src="https://github.com/user-attachments/assets/c50b332c-b386-4a1b-b657-c7628fab7059" />
+</p>
+
+<p align="center">
+  <img width="90%" alt="Code Evidence" src="https://github.com/user-attachments/assets/677d80b6-c0f7-4f7c-a3f6-01852c34f543" />
+</p>
+
+<p align="center">
+  <img width="90%" alt="VirusTotal Results" src="https://github.com/user-attachments/assets/4c80cfbe-225d-490c-8938-ac29a1b2b0b5" />
+</p>
+
+<p align="center">
+  <img width="90%" alt="PII Classification" src="https://github.com/user-attachments/assets/c02ace49-b152-4826-b41c-7b41abb110d3" />
+</p>
+
+---
+
+## Why This Exists
+
+In 2024-2025, malicious browser extensions compromised **millions of users**:
+
+- **DarkSpectre Campaign**: 8.8M users affected via fake productivity extensions
+- **ChatGPT Mods Campaign**: 16 extensions stealing Facebook session cookies
+- **GhostPoster**: Extensions hiding malicious code inside image files (steganography)
+- **Crypto Wallet Drainers**: Extensions replacing clipboard wallet addresses
+
+These extensions passed Chrome Web Store review. They looked legitimate. They had thousands of 5-star reviews.
+
+**Static analysis catches what review processes miss.**
+
+---
+
+## Quick Start
 
 ```bash
-# Analyze an extension by its ID
-python src/analyzer.py <extension_id>
+# Clone
+git clone https://github.com/debarshi17/chrome-extension-security-analyzer.git
+cd chrome-extension-security-analyzer
 
-# Fast mode (skips VirusTotal API calls for offline/quick analysis)
-python src/analyzer.py <extension_id> --fast
+# Install dependencies
+pip install -r requirements.txt
 
-# Skip just VirusTotal
-python src/analyzer.py <extension_id> --skip-vt
+# Analyze an extension (grab the ID from Chrome Web Store URL)
+python src/analyzer.py cjpalhdlnbpafiamejdnhcphjbkeiagm
+```
 
-# Enable dynamic network capture (requires: pip install playwright && playwright install chromium)
-python src/analyzer.py <extension_id> --dynamic
-
-# Dynamic analysis with custom timeout (default 30s)
-python src/analyzer.py <extension_id> --dynamic --dynamic-timeout 45
+**Optional: Add VirusTotal API key for domain reputation checks**
+```bash
+cp config.json.template config.json
+# Edit config.json with your free API key from https://www.virustotal.com/gui/join-us
 ```
 
 The extension ID is the 32-character string from the Chrome Web Store URL:
@@ -56,133 +96,176 @@ https://chrome.google.com/webstore/detail/extension-name/abcdefghijklmnopqrstuvw
                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
-Reports are saved to the `reports/` folder.
+---
+
+## Features
+
+### Detection Engine
+- **150+ Malicious Code Patterns** — Keyloggers, screen capture, data theft, C2 communication, crypto wallet theft
+- **Taint Analysis Engine** — Tracks data flow from sensitive sources (cookies, passwords) to network sinks (fetch, WebSocket)
+- **Cryptocurrency Theft Detection** — Wallet override, clipboard hijacking, seed phrase extraction, approve() injection
+- **Phishing Detection** — Fullscreen iframe overlays, fake login forms, password field monitoring
+- **Advanced Obfuscation Detection** — Entropy analysis, string rotation, eval bypass, constructor chains
+
+### Analysis Pipeline
+- **JavaScript AST Analysis** — Resolves config variables to extract exact exfiltration destinations
+- **VirusTotal Integration** — Checks domains against 90+ security vendors
+- **Threat Campaign Attribution** — Cross-references against known malware campaigns via OSINT
+- **PII Classification** — Identifies what sensitive data is accessed (credentials, cookies, financial)
+- **Dynamic Network Capture** — Runtime traffic analysis with Playwright + Chrome DevTools Protocol
+
+### Output
+- **Professional HTML Reports** — Dark-themed threat intelligence reports with code evidence
+- **Machine-Readable JSON** — For automation and integration
+- **Risk Scoring** — 0-10 scale with severity classification
+
+---
+
+## Use Cases
+
+| Who | Use Case |
+|-----|----------|
+| **Security Researchers** | Analyze suspicious extensions, hunt for malware campaigns |
+| **IT Administrators** | Audit extensions before enterprise deployment |
+| **Incident Responders** | Investigate compromised systems, extract IOCs |
+| **Browser Security Teams** | Automate extension vetting workflows |
+| **Bug Bounty Hunters** | Find malicious extensions for vendor reports |
+
+---
+
+## CLI Options
+
+```bash
+# Basic analysis
+python src/analyzer.py <extension_id>
+
+# Fast mode (skip VirusTotal API calls)
+python src/analyzer.py <extension_id> --fast
+
+# Enable dynamic network capture (requires Playwright)
+python src/analyzer.py <extension_id> --dynamic
+
+# Custom timeout for dynamic analysis
+python src/analyzer.py <extension_id> --dynamic --dynamic-timeout 45
+```
+
+---
 
 ## Detection Categories
 
-### Credential & Financial Data Theft
+### Credential & Financial Theft
 | Pattern | Description |
 |---------|-------------|
-| Password Field Targeting | Detects scripts targeting `input[type=password]` |
-| OTP/2FA Interception | Detects targeting of verification code inputs |
-| Credit Card Field Targeting | Detects access to payment card fields |
-| CSRF Token Extraction | Detects theft of anti-forgery tokens |
-| Hidden Autofill Trigger | Detects invisible fields designed to harvest autofilled data |
+| Password Field Targeting | Scripts targeting `input[type=password]` |
+| Credit Card Harvesting | Access to payment card fields |
+| OTP/2FA Interception | Theft of verification codes |
+| Hidden Autofill Trigger | Invisible fields harvesting autofilled data |
 
-### Keylogging & Input Capture
+### Cryptocurrency Theft
 | Pattern | Description |
 |---------|-------------|
-| Keyboard Event Listeners | Detects `keypress`, `keydown`, `keyup` handlers |
-| Keystroke Buffer Arrays | Detects arrays used to store captured keystrokes |
-| CSS Keylogging | Detects CSS attribute selectors for input exfiltration |
-| Form Submit Interception | Detects form submission hijacking |
-| Clipboard Theft | Detects `navigator.clipboard.read` access |
+| Wallet Object Override | Hijacking `window.ethereum` / `window.solana` |
+| Clipboard Address Swap | Replacing copied wallet addresses |
+| Seed Phrase Detection | Extracting BIP39 recovery phrases |
+| Token Approval Injection | Injecting unlimited `approve()` calls |
 
-### Screen Capture & Surveillance
+### Keylogging & Surveillance
 | Pattern | Description |
 |---------|-------------|
-| captureVisibleTab | Screenshots browser tabs |
-| desktopCapture API | Captures entire screen content |
-| tabCapture API | Records tab audio/video streams |
-| html2canvas | Third-party screenshot library |
-| getDisplayMedia | Screen recording API access |
+| Keystroke Capture | `keypress`, `keydown` event handlers with buffers |
+| Screen Recording | `captureVisibleTab`, `getDisplayMedia`, `tabCapture` |
+| CSS Keylogging | Attribute selectors exfiltrating input values |
+| Clipboard Theft | `navigator.clipboard.read` access |
 
 ### Data Exfiltration
 | Pattern | Description |
 |---------|-------------|
-| POST to External Servers | Detects data sent via fetch/XMLHttpRequest |
-| WebSocket C2 | Detects real-time command & control channels |
-| sendBeacon | Stealthy exfiltration that survives page close |
-| Encrypted Exfiltration | Detects RSA/AES encryption of stolen data |
-| FormData Blob Upload | Detects binary data uploads |
+| Taint Flow Detection | Cookies/passwords flowing to fetch/WebSocket |
+| Encrypted Exfiltration | RSA/AES encryption of stolen data |
+| sendBeacon | Stealthy exfiltration surviving page close |
+| WebSocket C2 | Real-time command & control channels |
 
 ### Code Injection & Evasion
 | Pattern | Description |
 |---------|-------------|
-| eval() / new Function() | Dynamic code execution |
-| Remote Script Injection | Loading external scripts via createElement |
 | CSP Header Removal | Removing Content-Security-Policy (confirmed malware) |
-| DOM Event Handler Injection | Manifest V3 remote code bypass |
-| DevTools Detection | Anti-analysis techniques |
-| JavaScript Obfuscation | _0x patterns, hex encoding, large string arrays |
+| DOM Event Injection | Manifest V3 remote code bypass |
+| Eval Bypass | `window['ev'+'al']` concatenation tricks |
+| Obfuscation Detection | String rotation, high entropy, constructor chains |
 
-### Browser Hijacking
-| Pattern | Description |
-|---------|-------------|
-| Search Engine Override | Redirects searches for affiliate fraud |
-| Homepage Hijacking | Changes browser homepage |
-| Startup Page Hijacking | Sets malicious startup pages |
-| New Tab Override | Replaces new tab page |
+---
 
 ## Dangerous Permission Combinations
 
-| Combination | Risk Level | Impact |
-|-------------|------------|--------|
-| `tabs` + `storage` | HIGH | Can track all visited URLs |
-| `tabs` + `<all_urls>` | CRITICAL | Can screenshot any website |
-| `cookies` + `<all_urls>` | CRITICAL | Can steal sessions from any site |
-| `scripting` + `<all_urls>` | CRITICAL | Can inject code anywhere |
-| `webRequest` + `<all_urls>` | CRITICAL | Can intercept all traffic |
-| `clipboardRead` + `storage` | HIGH | Can steal copied passwords |
-| `history` + `storage` | HIGH | Can exfiltrate browsing history |
+| Combination | Risk | Impact |
+|-------------|------|--------|
+| `cookies` + `<all_urls>` | CRITICAL | Steal sessions from any site |
+| `webRequest` + `<all_urls>` | CRITICAL | Intercept all traffic |
+| `scripting` + `<all_urls>` | CRITICAL | Inject code anywhere |
+| `tabs` + `<all_urls>` | CRITICAL | Screenshot any website |
+| `clipboardRead` + `storage` | HIGH | Steal copied passwords |
+
+---
 
 ## Advanced Detection
 
+### Taint Analysis Engine
+Tracks sensitive data from source to sink:
+```
+chrome.cookies.getAll() → JSON.stringify() → fetch()
+         ↑ SOURCE                              ↑ SINK
+
+[CRITICAL] Session cookies flowing to external server
+```
+
 ### Threat Campaign Attribution
-The analyzer cross-references extensions against:
-- Known malicious extension databases (Regularly updated to track all the latest extensions which were found to be malicious)
+Cross-references extensions against:
+- Known malicious extension databases (updated regularly)
 - OSINT web searches across security research sites
 - Cached attribution from previous scans
 
 ### Domain Intelligence
-- **Domain Age Detection**: Flags newly registered domains (<30 days = CRITICAL)
-- **High-Risk TLD Detection**: Flags .top, .xyz, .club, .tk, and other abuse-prone TLDs
-- **Safe Domain Whitelist**: Skips VirusTotal checks for known legitimate domains (Google, Mozilla, CDNs)
+- DGA (Domain Generation Algorithm) detection
+- Typosquatting detection
+- High-risk TLD flagging (.top, .xyz, .tk)
+- VirusTotal reputation with false positive filtering
 
-### PII Classification
-Identifies what sensitive data extensions access:
-- **CRITICAL**: Credentials, Financial Data
-- **HIGH**: Cookies/Sessions, Personal Info, Email Content
-- **MEDIUM**: Browsing History, Clipboard, Form Data
-- **LOW**: Device Info, Geolocation
-
-## Report Output
-
-The analyzer generates:
-- **JSON Report**: Machine-readable technical data
-- **HTML Report**: Professional dark-themed threat intelligence report with:
-  - Executive summary with risk score
-  - VirusTotal domain reputation results
-  - Code snippets with syntax highlighting
-  - PII classification breakdown
-  - Threat campaign attribution (if found)
-  - Actionable security recommendations
+---
 
 ## Limitations
 
-- Static analysis covers most detection; dynamic analysis (`--dynamic`) requires Playwright
-- Can't analyze code loaded from remote servers at runtime (unless `--dynamic` is used)
-- Heavily obfuscated code may evade some pattern matching
-- Some patterns may produce false positives - always review context
+- Static analysis covers most threats; use `--dynamic` for runtime behavior
+- Heavily obfuscated code may evade pattern matching
+- Remote code loaded at runtime requires dynamic analysis
+- Some patterns may need manual review for context
 
-  Report Screenshots:
-  <img width="1447" height="690" alt="image" src="https://github.com/user-attachments/assets/c50b332c-b386-4a1b-b657-c7628fab7059" />
-  <img width="1461" height="695" alt="image" src="https://github.com/user-attachments/assets/677d80b6-c0f7-4f7c-a3f6-01852c34f543" />
-  <img width="1176" height="610" alt="image" src="https://github.com/user-attachments/assets/4c80cfbe-225d-490c-8938-ac29a1b2b0b5" />
-  <img width="1570" height="880" alt="image" src="https://github.com/user-attachments/assets/c02ace49-b152-4826-b41c-7b41abb110d3" />
+---
 
+## Contributing
 
+Contributions welcome! Areas where help is needed:
 
+- [ ] New detection patterns for emerging threats
+- [ ] Browser extension (analyze from right-click menu)
+- [ ] Web UI for non-technical users
+- [ ] Additional threat campaign signatures
 
+See [issues](https://github.com/debarshi17/chrome-extension-security-analyzer/issues) for current tasks.
 
-## Legal
-
-For authorized security testing and research only. Don't use for malicious purposes.
-
-## Author
-
-[@debarshi17](https://github.com/debarshi17)
+---
 
 ## License
 
-MIT
+MIT — Use freely for security research and authorized testing.
+
+---
+
+## Author
+
+**[@debarshi17](https://github.com/debarshi17)**
+
+---
+
+<p align="center">
+  <b>If this tool helped you, consider giving it a ⭐</b>
+</p>
