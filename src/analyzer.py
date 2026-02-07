@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from downloader import ExtensionDownloader
+from downloader import ExtensionDownloader, BrowserType
 from unpacker import ExtensionUnpacker
 from static_analyzer import EnhancedStaticAnalyzer
 from domain_intelligence import DomainIntelligence
@@ -52,26 +52,35 @@ class ChromeExtensionAnalyzer:
         self.wallet_detector = WalletHijackDetector()
         self.phishing_detector = PhishingDetector()
     
-    def analyze_extension(self, extension_id):
+    def analyze_extension(self, extension_id, browser=BrowserType.CHROME):
         """
         Complete analysis pipeline with professional threat analysis
-        
+
         Args:
-            extension_id (str): Chrome extension ID
-            
+            extension_id (str): Browser extension ID
+            browser (BrowserType): Browser store (CHROME or EDGE)
+
         Returns:
             dict: Comprehensive analysis results
         """
+        browser_name = browser.value.upper()
         print("=" * 80)
-        print("[SCAN] CHROME EXTENSION SECURITY ANALYZER")
+        print(f"[SCAN] {browser_name} EXTENSION SECURITY ANALYZER")
         print("    Professional Threat Analysis Edition with VirusTotal")
         print("=" * 80)
-        print(f"\n[+] Target Extension ID: {extension_id}\n")
+        print(f"\n[+] Target Extension ID: {extension_id}")
+        print(f"[+] Extension Store: {browser_name}\n")
 
-        # Step 0: Fetch Chrome Web Store Metadata
-        print("[STORE] STEP 0: Fetching Chrome Web Store metadata...")
+        # Step 0: Fetch Store Metadata
+        store_name = "Edge Add-ons" if browser == BrowserType.EDGE else "Chrome Web Store"
+        print(f"[STORE] STEP 0: Fetching {store_name} metadata...")
         print("-" * 80)
-        store_metadata = self.store_metadata.fetch_metadata(extension_id)
+
+        if browser == BrowserType.EDGE:
+            # For Edge, use edge-specific metadata fetcher
+            store_metadata = self._fetch_edge_metadata(extension_id)
+        else:
+            store_metadata = self.store_metadata.fetch_metadata(extension_id)
 
         if store_metadata.get('available'):
             print(f"[+] Extension: {store_metadata.get('name', 'Unknown')}")
@@ -80,9 +89,10 @@ class ChromeExtensionAnalyzer:
             print(f"    Rating: {store_metadata.get('rating', 'N/A')}")
             print(f"    Last Updated: {store_metadata.get('last_updated_text', 'Unknown')}")
 
-            # Check for Chrome warnings (policy violations)
-            if store_metadata.get('has_chrome_warning'):
-                print(f"\n[!] CHROME POLICY WARNING: {store_metadata.get('chrome_warning')}")
+            # Check for store warnings (policy violations)
+            if store_metadata.get('has_chrome_warning') or store_metadata.get('has_warning'):
+                warning = store_metadata.get('chrome_warning') or store_metadata.get('warning')
+                print(f"\n[!] STORE WARNING: {warning}")
                 print(f"    Note: This is a policy violation, not necessarily malware")
 
             # Check risk signals
@@ -96,9 +106,9 @@ class ChromeExtensionAnalyzer:
             print(f"    Continuing with analysis...")
 
         # Step 1: Download
-        print("[DOWNLOAD] STEP 1: Downloading extension...")
+        print(f"[DOWNLOAD] STEP 1: Downloading {browser_name} extension...")
         print("-" * 80)
-        crx_path = self.downloader.download_extension(extension_id)
+        crx_path = self.downloader.download_extension(extension_id, browser=browser)
         
         if not crx_path:
             print("\n[[X]] Download failed. Extension may not exist or be unavailable.")
@@ -858,22 +868,100 @@ class ChromeExtensionAnalyzer:
             print(f"[!] Threat attribution failed: {str(e)}")
             return None
 
+    def _fetch_edge_metadata(self, extension_id):
+        """
+        Fetch metadata from Microsoft Edge Add-ons store
+
+        Args:
+            extension_id: Edge extension ID
+
+        Returns:
+            dict: Extension metadata
+        """
+        import requests
+        from bs4 import BeautifulSoup
+
+        store_url = f"https://microsoftedge.microsoft.com/addons/detail/{extension_id}"
+
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
+            }
+            response = requests.get(store_url, headers=headers, timeout=15)
+
+            if response.status_code != 200:
+                return {'available': False, 'error': f'HTTP {response.status_code}'}
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # Extract metadata from Edge Add-ons page
+            metadata = {
+                'available': True,
+                'store': 'edge',
+                'store_url': store_url
+            }
+
+            # Try to extract extension name
+            title_elem = soup.find('h1') or soup.find('title')
+            if title_elem:
+                name = title_elem.get_text().strip()
+                # Clean up title (remove " - Microsoft Edge Addons" suffix)
+                if ' - Microsoft Edge' in name:
+                    name = name.split(' - Microsoft Edge')[0].strip()
+                metadata['name'] = name
+
+            # Try to extract author
+            author_elem = soup.find('a', {'aria-label': lambda x: x and 'publisher' in x.lower() if x else False})
+            if not author_elem:
+                author_elem = soup.find('span', class_=lambda x: x and 'author' in x.lower() if x else False)
+            if author_elem:
+                metadata['author'] = author_elem.get_text().strip()
+            else:
+                metadata['author'] = 'Unknown'
+
+            metadata['author_verified'] = False  # Edge doesn't show verification the same way
+
+            # Try to extract user count
+            users_elem = soup.find(string=lambda x: x and ('users' in x.lower() or 'downloads' in x.lower()) if x else False)
+            if users_elem:
+                metadata['user_count_text'] = users_elem.strip()
+            else:
+                metadata['user_count_text'] = 'Unknown'
+
+            # Try to extract rating
+            rating_elem = soup.find('span', {'aria-label': lambda x: x and 'rating' in x.lower() if x else False})
+            if rating_elem:
+                metadata['rating'] = rating_elem.get_text().strip()
+            else:
+                metadata['rating'] = 'N/A'
+
+            metadata['last_updated_text'] = 'Unknown'
+            metadata['risk_signals'] = {}
+
+            return metadata
+
+        except Exception as e:
+            return {'available': False, 'error': str(e)}
+
 
 def parse_cli_args(argv=None):
     """Parse CLI arguments (exposed for tests). Accepts optional argv list."""
     parser = argparse.ArgumentParser(
-        description='Professional Chrome Extension Security Analyzer with VirusTotal',
+        description='Professional Browser Extension Security Analyzer with VirusTotal',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Analyze uBlock Origin
+  # Analyze Chrome extension (uBlock Origin)
   python src/analyzer.py cjpalhdlnbpafiamejdnhcphjbkeiagm
-  
+
+  # Analyze Edge extension
+  python src/analyzer.py odfafepnkmbhccpbejgmiehpchacaeak --edge
+
   # Analyze a suspicious extension
   python src/analyzer.py eebihieclccoidddmjcencomodomdoei
-  
+
 Features:
-  [OK] Chrome Web Store metadata collection
+  [OK] Chrome Web Store & Edge Add-ons support
   [OK] False positive suppression (Firebase, jQuery, CDNs)
   [OK] Threat campaign attribution via web search
   [OK] VirusTotal domain reputation checking
@@ -885,13 +973,15 @@ Features:
   [OK] Dynamic network capture via Playwright + CDP (--dynamic flag)
   [OK] IOC database management
   [OK] Permission combination risk analysis
-  [OK] 64+ malicious code pattern detection
+  [OK] 150+ malicious code pattern detection
+  [OK] Taint analysis (source-sink tracking)
+  [OK] Cryptocurrency theft detection
         """
     )
 
     parser.add_argument(
         'extension_id',
-        help='Chrome extension ID (32-character string from Chrome Web Store URL)'
+        help='Extension ID (32-character string from Chrome Web Store or Edge Add-ons URL)'
     )
     
     parser.add_argument(
@@ -925,6 +1015,18 @@ Features:
         help='Timeout in seconds for dynamic analysis (default: 30)'
     )
 
+    parser.add_argument(
+        '--edge',
+        action='store_true',
+        help='Analyze extension from Microsoft Edge Add-ons store instead of Chrome Web Store'
+    )
+
+    parser.add_argument(
+        '--auto-detect',
+        action='store_true',
+        help='Auto-detect which store the extension belongs to'
+    )
+
     return parser.parse_args(argv)
 
 
@@ -943,10 +1045,27 @@ def main():
             print("[[X]] Aborted.")
             sys.exit(1)
 
+    # Determine browser type
+    browser = BrowserType.CHROME
+    if getattr(args, 'edge', False):
+        browser = BrowserType.EDGE
+    elif getattr(args, 'auto_detect', False):
+        print("[+] Auto-detecting extension store...")
+        from downloader import ExtensionDownloader
+        downloader = ExtensionDownloader()
+        detected = downloader.detect_browser_store(args.extension_id)
+        if detected:
+            browser = detected
+            print(f"[+] Detected: {browser.value.upper()} store")
+        else:
+            print("[!] Could not detect store, defaulting to Chrome")
+
+    browser_name = browser.value.upper()
+
     # Run analysis
-    print("""
+    print(f"""
     ========================================================================
-       CHROME EXTENSION SECURITY ANALYZER - PROFESSIONAL EDITION
+       {browser_name} EXTENSION SECURITY ANALYZER - PROFESSIONAL EDITION
        Threat Analysis Platform with VirusTotal Integration
     ========================================================================
     """)
@@ -958,7 +1077,7 @@ def main():
     analyzer.run_dynamic = getattr(args, 'dynamic', False) and not fast_mode
     analyzer.dynamic_timeout = getattr(args, 'dynamic_timeout', 30)
 
-    results = analyzer.analyze_extension(args.extension_id)
+    results = analyzer.analyze_extension(args.extension_id, browser=browser)
     
     if results:
         # Exit code based on risk level

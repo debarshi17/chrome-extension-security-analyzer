@@ -1,8 +1,10 @@
-# Chrome Extension Security Analyzer
+# Browser Extension Security Analyzer
 
-> **Detect malicious Chrome extensions before they steal your data.**
+> **Detect malicious browser extensions before they steal your data.**
 
 Browser extensions have full access to your passwords, cookies, and browsing history. Malicious ones exploit this to steal credentials, hijack crypto wallets, and spy on users. This tool catches them.
+
+**Supports both Chrome and Microsoft Edge extensions.**
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
@@ -12,10 +14,14 @@ Browser extensions have full access to your passwords, cookies, and browsing his
 
 ## Demo
 
-Analyze any Chrome extension in seconds:
+Analyze any Chrome or Edge extension in seconds:
 
 ```bash
+# Chrome extension
 python src/analyzer.py nkbihfbeogaeaoehlefnkodbefgpgknn
+
+# Edge extension
+python src/analyzer.py odfafepnkmbhccpbejgmiehpchacaeak --edge
 ```
 
 **Output:**
@@ -90,10 +96,18 @@ cp config.json.template config.json
 # Edit config.json with your free API key from https://www.virustotal.com/gui/join-us
 ```
 
-The extension ID is the 32-character string from the Chrome Web Store URL:
+The extension ID is the 32-character string from the store URL:
+
+**Chrome Web Store:**
 ```
 https://chrome.google.com/webstore/detail/extension-name/abcdefghijklmnopqrstuvwxyz123456
                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+```
+
+**Microsoft Edge Add-ons:**
+```
+https://microsoftedge.microsoft.com/addons/detail/extension-name/abcdefghijklmnopqrstuvwxyz123456
+                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
 
 ---
@@ -136,8 +150,14 @@ https://chrome.google.com/webstore/detail/extension-name/abcdefghijklmnopqrstuvw
 ## CLI Options
 
 ```bash
-# Basic analysis
+# Analyze Chrome extension (default)
 python src/analyzer.py <extension_id>
+
+# Analyze Microsoft Edge extension
+python src/analyzer.py <extension_id> --edge
+
+# Auto-detect which store the extension belongs to
+python src/analyzer.py <extension_id> --auto-detect
 
 # Fast mode (skip VirusTotal API calls)
 python src/analyzer.py <extension_id> --fast
@@ -147,6 +167,9 @@ python src/analyzer.py <extension_id> --dynamic
 
 # Custom timeout for dynamic analysis
 python src/analyzer.py <extension_id> --dynamic --dynamic-timeout 45
+
+# Combine flags
+python src/analyzer.py <extension_id> --edge --skip-vt
 ```
 
 ---
