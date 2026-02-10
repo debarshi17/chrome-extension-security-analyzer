@@ -84,7 +84,11 @@ git clone https://github.com/debarshi17/chrome-extension-security-analyzer.git
 cd chrome-extension-security-analyzer
 
 python3 -m venv myenv
+#for linux/macOS:
 source myenv/bin/activate
+
+#for Windows
+myenv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
