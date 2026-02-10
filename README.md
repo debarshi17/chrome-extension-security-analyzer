@@ -83,6 +83,9 @@ These extensions passed Chrome Web Store review. They looked legitimate. They ha
 git clone https://github.com/debarshi17/chrome-extension-security-analyzer.git
 cd chrome-extension-security-analyzer
 
+python3 -m venv myenv
+source myenv/bin/activate
+
 # Install dependencies
 pip install -r requirements.txt
 
