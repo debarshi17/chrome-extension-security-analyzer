@@ -23,7 +23,7 @@ def _ast_log(msg, data=None, hypothesis_id=None):
 # #endregion
 
 # Max file size for full AST parsing (larger files skip AST to avoid hangs)
-MAX_FILE_SIZE_FOR_AST = 2 * 1024 * 1024  # 2 MiB
+MAX_FILE_SIZE_FOR_AST = 1 * 1024 * 1024  # 1 MiB
 # Max recursion depth in AST traversal to prevent runaway / stack overflow
 MAX_TRAVERSE_DEPTH = 10000
 
@@ -38,9 +38,10 @@ class JavaScriptASTAnalyzer:
         self.chrome_api_usage = []
         self.config_values = {}  # Store resolved config values
         
-    def analyze_directory(self, extension_dir, progress_callback=None):
-        """Analyze all JavaScript files in an extension directory.
+    def analyze_directory(self, extension_dir, progress_callback=None, js_file_list=None):
+        """Analyze JavaScript files in an extension directory.
         progress_callback: optional callable invoked once per file (for unified progress bar).
+        js_file_list: optional list of Paths to scan (e.g. manifest-prioritized); when provided, only these files are analyzed.
         """
         
         extension_dir = Path(extension_dir)
@@ -50,14 +51,21 @@ class JavaScriptASTAnalyzer:
             'data_exfiltration': [],
             'chrome_api_abuse': [],
             'obfuscation': [],
-            'suspicious_patterns': []
+            'suspicious_patterns': [],
+            'parse_errors': []  # Files that failed parse but were still considered
         }
         
-        # Find all JavaScript files, excluding node_modules and similar dependency trees
-        all_js = list(extension_dir.rglob('*.js'))
-        js_files = [p for p in all_js if 'node_modules' not in p.parts and 'bower_components' not in p.parts]
-        if len(js_files) != len(all_js):
-            print(f"[AST] Skipping {len(all_js) - len(js_files)} JS file(s) under node_modules/bower_components")
+        if js_file_list is not None:
+            js_files = [Path(p) if not isinstance(p, Path) else p for p in js_file_list]
+        else:
+            all_js = list(extension_dir.rglob('*.js'))
+            js_files = [p for p in all_js if 'node_modules' not in p.parts and 'bower_components' not in p.parts]
+            if len(js_files) != len(all_js):
+                print(f"[AST] Skipping {len(all_js) - len(js_files)} JS file(s) under node_modules/bower_components")
+            MAX_JS_FILES = 300
+            if len(js_files) > MAX_JS_FILES:
+                js_files = sorted(js_files, key=lambda p: p.stat().st_size)[:MAX_JS_FILES]
+                print(f"[AST] Capped to {MAX_JS_FILES} smallest JS files (extension has many files)")
         # #region agent log
         _ast_log('AST analyze_directory started', {'js_file_count': len(js_files), 'large_files': [{'path': str(p.relative_to(extension_dir)), 'size_kb': p.stat().st_size // 1024} for p in js_files if p.stat().st_size > 512 * 1024]}, 'H5')
         # #endregion
@@ -75,37 +83,62 @@ class JavaScriptASTAnalyzer:
         # STEP 2: Analyze each file
         for idx, js_file in enumerate(js_files):
             try:
-                # #region agent log
                 _rel = str(js_file.relative_to(extension_dir))
+            except ValueError:
+                _rel = str(js_file)
+            try:
                 _sz = js_file.stat().st_size
-                _t0 = time.perf_counter()
-                _ast_log('AST file start', {'index': idx, 'path': _rel, 'size_bytes': _sz, 'size_kb': _sz // 1024}, 'H3')
-                # #endregion
-                # Skip full AST for very large files to avoid parse/traverse hangs
+            except OSError:
+                _sz = 0
+            _t0 = time.perf_counter()
+            # #region agent log
+            _ast_log('AST file start', {'index': idx, 'path': _rel, 'size_bytes': _sz, 'size_kb': _sz // 1024}, 'H3')
+            # #endregion
+            file_results = None
+            try:
                 if _sz > MAX_FILE_SIZE_FOR_AST:
                     print(f"[AST] Skipping AST for large file ({_sz // 1024} KiB): {_rel}")
                     file_results = self._analyze_file_skipped_large(_rel, _sz)
                 else:
-                    with open(js_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
-                    file_results = self.analyze_file(_rel, content)
-                # #region agent log
-                _ast_log('AST file done', {'path': _rel, 'elapsed_ms': round((time.perf_counter() - _t0) * 1000)}, 'H1')
-                # #endregion
-                
-                # Aggregate results
+                    content = None
+                    for encoding in ('utf-8', 'latin-1', 'cp1252'):
+                        try:
+                            with open(js_file, 'r', encoding=encoding, errors='replace') as f:
+                                content = f.read()
+                            break
+                        except (OSError, UnicodeDecodeError):
+                            continue
+                    if content is None:
+                        file_results = {
+                            'file': _rel,
+                            'network_calls': [], 'data_exfiltration': [], 'chrome_api_abuse': [],
+                            'obfuscation': [{'type': 'Read Error', 'description': 'Could not read file (encoding/access)', 'severity': 'low'}],
+                            'suspicious_patterns': []
+                        }
+                        all_results['parse_errors'].append({'file': _rel, 'error': 'Could not read file'})
+                    else:
+                        file_results = self.analyze_file(_rel, content)
+            except Exception as e:
+                print(f"[AST] Error analyzing {js_file.name}: {e}")
+                all_results['parse_errors'].append({'file': _rel, 'error': str(e)})
+                file_results = {
+                    'file': _rel,
+                    'network_calls': [], 'data_exfiltration': [], 'chrome_api_abuse': [],
+                    'obfuscation': [{'type': 'Parse/Scan Error', 'description': str(e)[:200], 'severity': 'low'}],
+                    'suspicious_patterns': []
+                }
+            if file_results:
                 all_results['files_analyzed'] += 1
                 all_results['network_calls'].extend(file_results.get('network_calls', []))
                 all_results['data_exfiltration'].extend(file_results.get('data_exfiltration', []))
                 all_results['chrome_api_abuse'].extend(file_results.get('chrome_api_abuse', []))
                 all_results['obfuscation'].extend(file_results.get('obfuscation', []))
                 all_results['suspicious_patterns'].extend(file_results.get('suspicious_patterns', []))
-                
-                if progress_callback:
-                    progress_callback()
-                
-            except Exception as e:
-                print(f"[AST] Error analyzing {js_file.name}: {e}")
+            if progress_callback:
+                progress_callback()
+            # #region agent log
+            _ast_log('AST file done', {'path': _rel, 'elapsed_ms': round((time.perf_counter() - _t0) * 1000)}, 'H1')
+            # #endregion
         
         # Print summary
         if all_results['data_exfiltration']:

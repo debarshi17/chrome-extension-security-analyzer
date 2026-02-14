@@ -45,6 +45,10 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 analysis_jobs = {}
 
 
+class AnalysisCancelledError(Exception):
+    """Raised when user cancels an analysis job."""
+
+
 class AnalysisRequest(BaseModel):
     extension_id: str
 
@@ -66,9 +70,57 @@ async def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+def _run_analysis(extension_id: str):
+    """Background task: run analysis and update progress in analysis_jobs"""
+    def progress_callback(percent: int, step_name: str, detail: str):
+        if extension_id not in analysis_jobs:
+            return
+        status = analysis_jobs[extension_id].get("status")
+        if status == "cancelled":
+            raise AnalysisCancelledError("Analysis cancelled by user")
+        if status == "running":
+            analysis_jobs[extension_id]["percent"] = percent
+            analysis_jobs[extension_id]["step_name"] = step_name
+            analysis_jobs[extension_id]["detail"] = detail
+            analysis_jobs[extension_id]["message"] = f"{step_name}: {detail}" if detail else step_name
+
+    try:
+        analyzer = ChromeExtensionAnalyzer()
+        results = analyzer.analyze_extension(extension_id, progress_callback=progress_callback)
+
+        if results:
+            report_path = REPORTS_DIR / f"{extension_id}_threat_intel_report.html"
+            if report_path.exists():
+                analysis_jobs[extension_id] = {
+                    "status": "complete",
+                    "message": "Analysis complete",
+                    "report_url": f"/report/{extension_id}",
+                    "risk_score": results.get("risk_score", 0),
+                    "risk_level": results.get("risk_level", "UNKNOWN"),
+                    "percent": 100,
+                    "step_name": "Complete",
+                    "detail": "Analysis finished."
+                }
+                return
+        analysis_jobs[extension_id] = {
+            "status": "error",
+            "message": "Analysis failed - extension may not exist or is not accessible"
+        }
+    except AnalysisCancelledError:
+        analysis_jobs[extension_id] = {
+            "status": "cancelled",
+            "message": "Analysis cancelled by user"
+        }
+    except Exception as e:
+        analysis_jobs[extension_id] = {
+            "status": "error",
+            "message": str(e)
+        }
+
+
 @app.post("/analyze", response_class=JSONResponse)
-async def analyze_extension(req: AnalysisRequest):
-    """Start analysis of a Chrome extension"""
+async def analyze_extension(req: AnalysisRequest, background_tasks: BackgroundTasks):
+    """Start analysis of a Chrome extension (runs in background, returns immediately)"""
 
     extension_id = req.extension_id.strip().lower()
 
@@ -81,49 +133,20 @@ async def analyze_extension(req: AnalysisRequest):
 
     # Check if already analyzing
     if extension_id in analysis_jobs and analysis_jobs[extension_id]["status"] == "running":
-        return {"status": "running", "message": "Analysis already in progress"}
+        return {"status": "running", "extension_id": extension_id}
 
-    # Mark as running
-    analysis_jobs[extension_id] = {"status": "running", "message": "Starting analysis..."}
+    # Mark as running and schedule background analysis
+    analysis_jobs[extension_id] = {
+        "status": "running",
+        "message": "Starting analysis...",
+        "percent": 0,
+        "step_name": "Initializing",
+        "detail": "Fetching extension metadata..."
+    }
 
-    try:
-        # Run analysis
-        analyzer = ChromeExtensionAnalyzer()
+    background_tasks.add_task(_run_analysis, extension_id)
 
-        # Update status
-        analysis_jobs[extension_id]["message"] = "Downloading extension..."
-
-        # Run the analysis
-        results = analyzer.analyze_extension(extension_id)
-
-        if results:
-            report_path = REPORTS_DIR / f"{extension_id}_threat_intel_report.html"
-            if report_path.exists():
-                analysis_jobs[extension_id] = {
-                    "status": "complete",
-                    "message": "Analysis complete",
-                    "report_url": f"/report/{extension_id}"
-                }
-                return {
-                    "status": "complete",
-                    "message": "Analysis complete",
-                    "report_url": f"/report/{extension_id}",
-                    "risk_score": results.get("risk_score", 0),
-                    "risk_level": results.get("risk_level", "UNKNOWN")
-                }
-
-        analysis_jobs[extension_id] = {
-            "status": "error",
-            "message": "Analysis failed - extension may not exist or is not accessible"
-        }
-        raise HTTPException(status_code=404, detail="Extension not found or analysis failed")
-
-    except Exception as e:
-        analysis_jobs[extension_id] = {
-            "status": "error",
-            "message": str(e)
-        }
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "running", "extension_id": extension_id}
 
 
 @app.get("/status/{extension_id}")
@@ -132,6 +155,22 @@ async def get_status(extension_id: str):
     if extension_id not in analysis_jobs:
         return {"status": "not_found", "message": "No analysis found for this extension"}
     return analysis_jobs[extension_id]
+
+
+@app.post("/cancel/{extension_id}")
+async def cancel_analysis(extension_id: str):
+    """Cancel a running analysis job"""
+    extension_id = extension_id.strip().lower()
+    if not validate_extension_id(extension_id):
+        raise HTTPException(status_code=400, detail="Invalid extension ID")
+    if extension_id not in analysis_jobs:
+        return {"status": "not_found", "message": "No analysis found for this extension"}
+    if analysis_jobs[extension_id].get("status") != "running":
+        return {"status": "already_done", "message": f"Job is not running (status: {analysis_jobs[extension_id].get('status')})"}
+
+    analysis_jobs[extension_id]["status"] = "cancelled"
+    analysis_jobs[extension_id]["message"] = "Cancelling..."
+    return {"status": "cancelled", "message": "Cancellation requested. Analysis will stop at next checkpoint."}
 
 
 @app.get("/report/{extension_id}", response_class=HTMLResponse)

@@ -1380,7 +1380,7 @@ class EnhancedStaticAnalyzer:
                 gap_match = self._WIDE_GAP_RE.search(raw)
                 max_gap = int(gap_match.group(1)) if gap_match else 0
 
-                if max_gap >= 200:
+                if max_gap >= 50:
                     # Split into anchor + tail for two-pass matching
                     parts = self._WIDE_GAP_RE.split(raw, maxsplit=1)
                     anchor = re.compile(parts[0], re.IGNORECASE)
@@ -1408,8 +1408,8 @@ class EnhancedStaticAnalyzer:
             except re.error as e:
                 print(f"[!] Warning: Failed to compile pattern '{pattern_def['name']}': {e}")
 
-    # Cap file size for pattern-scan read to avoid slow regex on huge bundles (bytes)
-    _MAX_READ_SIZE_FOR_SCAN = 5 * 1024 * 1024  # 5 MiB
+    # Cap file size for pattern-scan read to avoid slow regex/entropy on huge bundles
+    _MAX_READ_SIZE_FOR_SCAN = 1 * 1024 * 1024  # 1 MiB
 
     def _read_file_cached(self, file_path):
         """Read file content with caching to avoid multiple reads
@@ -1434,12 +1434,101 @@ class EnhancedStaticAnalyzer:
                 content = f.read(self._MAX_READ_SIZE_FOR_SCAN)
                 self._file_cache[file_str] = content
                 return content
-        except Exception as e:
-            return None
+        except Exception:
+            try:
+                with open(file_path, 'r', encoding='latin-1', errors='replace') as f:
+                    content = f.read(self._MAX_READ_SIZE_FOR_SCAN)
+                    self._file_cache[file_str] = content
+                    return content
+            except Exception:
+                return None
 
     def _clear_file_cache(self):
         """Clear file cache after analysis to free memory"""
         self._file_cache.clear()
+
+    @staticmethod
+    def _get_manifest_referenced_js(extension_dir, manifest):
+        """Return set of relative path strings for every JS file referenced in manifest.
+        These are security-critical (background, content scripts, service worker, etc.).
+        """
+        refs = set()
+        ext_dir = Path(extension_dir)
+        base = ext_dir
+
+        def norm(p):
+            s = str(p).replace('\\', '/').lstrip('/')
+            return s
+
+        # MV2: background.scripts[]
+        bg = manifest.get('background', {})
+        if isinstance(bg, dict):
+            for script in bg.get('scripts', []):
+                if script.endswith('.js'):
+                    refs.add(norm(script))
+            # MV3: background.service_worker (single JS)
+            sw = bg.get('service_worker')
+            if isinstance(sw, str) and sw.endswith('.js'):
+                refs.add(norm(sw))
+
+        # content_scripts[].js[]
+        for cs in manifest.get('content_scripts', []):
+            for script in cs.get('js', []):
+                if script.endswith('.js'):
+                    refs.add(norm(script))
+
+        # devtools_page (can be .js in some edge cases; usually .html)
+        dev = manifest.get('devtools_page')
+        if dev and isinstance(dev, str) and dev.endswith('.js'):
+            refs.add(norm(dev))
+
+        return refs
+
+    def _prioritize_js_files_for_security(self, extension_dir, manifest, max_files=300):
+        """Return list of JS Paths to scan: manifest-referenced first, then by relevance/size.
+        Ensures background, content scripts, and app logic are never dropped when capping.
+        """
+        extension_dir = Path(extension_dir)
+        all_js = list(extension_dir.rglob('*.js'))
+        js_files = [p for p in all_js if 'node_modules' not in p.parts and 'bower_components' not in p.parts]
+
+        manifest_refs = self._get_manifest_referenced_js(extension_dir, manifest)
+
+        def rel_path(p):
+            return str(p.relative_to(extension_dir)).replace('\\', '/')
+
+        def is_manifest_referenced(p):
+            r = rel_path(p)
+            if r in manifest_refs:
+                return True
+            for ref in manifest_refs:
+                if r.endswith(ref) or ref.endswith(r) or r.replace('/', '\\') == ref.replace('/', '\\'):
+                    return True
+            return False
+
+        def relevance_score(p):
+            """Lower = more important for security review."""
+            r = rel_path(p).lower()
+            if is_manifest_referenced(p):
+                return 0
+            if 'content' in r or 'inject' in r:
+                return 1
+            if 'background' in r or 'service' in r or 'worker' in r:
+                return 2
+            if 'popup' in r or 'options' in r or 'script' in r:
+                return 3
+            if any(x in r for x in ('auth', 'login', 'register', 'api', 'config')):
+                return 4
+            return 5
+
+        # Sort: manifest first, then by relevance, then by size (smaller = more likely app code)
+        prioritized = sorted(
+            js_files,
+            key=lambda p: (relevance_score(p), p.stat().st_size)
+        )
+        if len(prioritized) > max_files:
+            return prioritized[:max_files]
+        return prioritized
 
     # Known third-party libraries that should have findings downgraded
     KNOWN_LIBRARIES = [
@@ -1709,11 +1798,13 @@ class EnhancedStaticAnalyzer:
         # Analyze extension's own CSP policy
         results['csp_analysis'] = self._analyze_csp_policy(manifest)
 
-        # Scan code files (exclude node_modules/bower_components to avoid huge dependency trees)
-        all_js = list(extension_dir.rglob('*.js'))
-        js_files = [p for p in all_js if 'node_modules' not in p.parts and 'bower_components' not in p.parts]
-        if len(js_files) != len(all_js):
-            print(f"[+] Skipping {len(all_js) - len(js_files)} JS file(s) under node_modules/bower_components")
+        # Security-prioritized file list: manifest-referenced (background, content_scripts, etc.) first, then by relevance
+        js_files = self._prioritize_js_files_for_security(extension_dir, manifest, max_files=300)
+        all_js_count = len(list(extension_dir.rglob('*.js')))
+        if len(js_files) < all_js_count:
+            print(f"[+] Scanning {len(js_files)} security-relevant JS files (manifest + app logic; {all_js_count - len(js_files)} excluded)")
+        else:
+            print(f"[+] Scanning {len(js_files)} JavaScript files...")
         # #region agent log
         _static_log('static analyze_extension js_files', {'count': len(js_files), 'large': [{'path': str(p.relative_to(extension_dir)), 'size_kb': p.stat().st_size // 1024} for p in js_files if p.stat().st_size > 512 * 1024]}, 'H5')
         # #endregion
@@ -1733,9 +1824,9 @@ class EnhancedStaticAnalyzer:
             _total_steps = 2 * len(js_files)
             _pbar = tqdm(total=_total_steps, desc="Static analysis", unit="file", leave=True, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} ({percentage:3.0f}%)")
             _pbar.update(0)
-            results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir, progress_callback=lambda: _pbar.update(1))
+            results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir, progress_callback=lambda: _pbar.update(1), js_file_list=js_files)
         else:
-            results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir)
+            results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir, js_file_list=js_files)
         # #region agent log
         _static_log('static AST analyze_directory returned', {'elapsed_ms': round((time.perf_counter() - _t_ast) * 1000)}, 'H1')
         # #endregion
@@ -2425,14 +2516,18 @@ class EnhancedStaticAnalyzer:
         
         return external
     
+    # Max sample size for obfuscation checks (avoids ReDoS on huge minified bundles)
+    _OBFUSCATION_SAMPLE_SIZE = 300 * 1024  # 300 KiB
+
     def detect_obfuscation(self, code):
-        """Detect if code is obfuscated"""
-        entropy = self.calculate_entropy(code)
-        hex_escapes = len(re.findall(r'\\x[0-9a-fA-F]{2}', code))
-        unicode_escapes = len(re.findall(r'\\u[0-9a-fA-F]{4}', code))
-        long_vars = len(re.findall(r'\b[a-zA-Z_$][a-zA-Z0-9_$]{50,}\b', code))
-        single_letters = len(re.findall(r'\b[a-zA-Z_$]\b', code))
-        total_vars = len(re.findall(r'\b[a-zA-Z_$][a-zA-Z0-9_$]*\b', code))
+        """Detect if code is obfuscated. Samples large files to avoid ReDoS/slowness."""
+        sample = code[:self._OBFUSCATION_SAMPLE_SIZE] if len(code) > self._OBFUSCATION_SAMPLE_SIZE else code
+        entropy = self.calculate_entropy(sample)
+        hex_escapes = len(re.findall(r'\\x[0-9a-fA-F]{2}', sample))
+        unicode_escapes = len(re.findall(r'\\u[0-9a-fA-F]{4}', sample))
+        long_vars = len(re.findall(r'\b[a-zA-Z_$][a-zA-Z0-9_$]{50,}\b', sample))
+        single_letters = len(re.findall(r'\b[a-zA-Z_$]\b', sample))
+        total_vars = len(re.findall(r'\b[a-zA-Z_$][a-zA-Z0-9_$]*\b', sample))
         single_letter_ratio = single_letters / max(total_vars, 1)
         
         is_obfuscated = (
@@ -2453,16 +2548,24 @@ class EnhancedStaticAnalyzer:
         }
     
     def calculate_entropy(self, data):
-        """Calculate Shannon entropy of data"""
+        """Calculate Shannon entropy of data. O(n) single-pass (was O(256*n))."""
         if not data:
             return 0
-        
+        try:
+            raw = data.encode('utf-8', errors='ignore')
+        except Exception:
+            return 0
+        n = len(raw)
+        if n == 0:
+            return 0
+        counts = [0] * 256
+        for b in raw:
+            counts[b] += 1
         entropy = 0
-        for x in range(256):
-            p_x = data.count(chr(x)) / len(data)
-            if p_x > 0:
-                entropy += - p_x * math.log2(p_x)
-        
+        for c in counts:
+            if c > 0:
+                p_x = c / n
+                entropy += -p_x * math.log2(p_x)
         return entropy
     
     def detect_campaign_membership(self, manifest, settings_overrides, domain_analysis):

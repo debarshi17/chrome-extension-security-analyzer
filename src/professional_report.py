@@ -16,10 +16,62 @@ class ProfessionalReportGenerator:
     def __init__(self):
         self.report_dir = Path("reports")
         self.report_dir.mkdir(exist_ok=True)
+        self._file_display_map = {}
+
+    def _build_file_display_map(self, results):
+        """Build map: full path -> display name. Duplicate basenames become filename(2), filename(3), etc."""
+        paths = []
+        for p in results.get('malicious_patterns', []):
+            f = p.get('file')
+            if f:
+                paths.append(f)
+        ast = results.get('ast_results', {})
+        for item in ast.get('data_exfiltration', []) + ast.get('network_calls', []):
+            f = item.get('file')
+            if f:
+                paths.append(f)
+        sensitive = results.get('pii_classification', {}) or {}
+        for gm in sensitive.get('gmail_module', []):
+            f = gm.get('file')
+            if f:
+                paths.append(f)
+        adv = results.get('advanced_detection') or {}
+        for finding in adv.get('findings', []):
+            ev = finding.get('evidence', {}) or {}
+            if isinstance(ev, dict) and ev.get('file'):
+                paths.append(ev['file'])
+        for cat_data in adv.values():
+            if isinstance(cat_data, list):
+                for finding in cat_data:
+                    ev = finding.get('evidence', {}) if isinstance(finding, dict) else {}
+                    if isinstance(ev, dict) and ev.get('file'):
+                        paths.append(ev['file'])
+        for rel_path in (results.get('obfuscation_indicators') or {}).keys():
+            if rel_path:
+                paths.append(rel_path)
+        # Order by first occurrence; then assign display names by basename count
+        seen_basename_count = {}
+        display_map = {}
+        for p in paths:
+            if not p or p in display_map:
+                continue
+            base = Path(p).name or p
+            count = seen_basename_count.get(base, 0) + 1
+            seen_basename_count[base] = count
+            display_map[p] = f"{base}({count})" if count > 1 else base
+        return display_map
+
+    def _file_display_name(self, file_path):
+        """Return display name for a file path (disambiguates duplicate basenames as filename(2), etc.)."""
+        if not file_path or file_path == 'N/A':
+            return file_path or 'unknown'
+        return self._file_display_map.get(file_path, file_path)
     
     def generate_threat_analysis_report(self, results):
         """Generate professional threat analysis report"""
         
+        self._file_display_map = self._build_file_display_map(results)
+
         extension_name = results.get('name', 'Unknown Extension')
         extension_id = results.get('extension_id', 'unknown')
         extension_desc = results.get('description', '')
@@ -1741,7 +1793,7 @@ class ProfessionalReportGenerator:
                 </div>
 """
             for gm in gmail_modules:
-                file_name = html_module.escape(gm.get('file', ''))
+                file_name = html_module.escape(self._file_display_name(gm.get('file', '')))
                 indicators = gm.get('indicators', [])
                 count = gm.get('indicator_count', 0)
                 html += f"""
@@ -2644,7 +2696,7 @@ class ProfessionalReportGenerator:
                 # Prefer context_with_lines (Chrome multi-line) over raw context/evidence
                 context_code = threat.get('context_with_lines', '') or threat.get('context', '') or threat.get('evidence', '')
                 if context_code and len(context_code) > 10:
-                    file_name = threat.get('file', 'unknown.js')
+                    file_name = self._file_display_name(threat.get('file', 'unknown.js'))
                     line_num = threat.get('line', 0)
                     start_line = threat.get('context_start_line', max(1, line_num))
                     matched_text = threat.get('matched_text', '')
@@ -2672,7 +2724,7 @@ class ProfessionalReportGenerator:
                         html += self._generate_code_snippet(context_code, file_name, line_num, start_line)
                 
                 html += f"""
-                <div class="threat-location">📍 {threat.get('file', 'Unknown file')} : Line {threat.get('line', 0)}</div>
+                <div class="threat-location">📍 {self._file_display_name(threat.get('file', 'Unknown file'))} : Line {threat.get('line', 0)}</div>
             </div>
 """
         
@@ -2995,7 +3047,7 @@ class ProfessionalReportGenerator:
             for finding in csp_findings[:3]:
                 # Safely get evidence
                 evidence = finding.get('evidence', {})
-                file_name = evidence.get('file', 'N/A') if isinstance(evidence, dict) else 'N/A'
+                file_name = self._file_display_name(evidence.get('file', 'N/A')) if isinstance(evidence, dict) else 'N/A'
 
                 html += f"""
                 <div class="finding-card" style="border-left: 4px solid var(--color-critical); background: rgba(239, 68, 68, 0.1);">
@@ -3019,7 +3071,7 @@ class ProfessionalReportGenerator:
                 evidence = finding.get('evidence', {})
                 indicators = evidence.get('indicators_found', []) if isinstance(evidence, dict) else []
                 indicators_str = ', '.join(indicators) if indicators else 'N/A'
-                file_name = evidence.get('file', 'N/A') if isinstance(evidence, dict) else 'N/A'
+                file_name = self._file_display_name(evidence.get('file', 'N/A')) if isinstance(evidence, dict) else 'N/A'
 
                 html += f"""
                 <div class="finding-card" style="border-left: 4px solid var(--color-critical);">
@@ -3082,7 +3134,7 @@ class ProfessionalReportGenerator:
                 evidence = finding.get('evidence', {})
                 techniques = evidence.get('obfuscation_techniques', []) if isinstance(evidence, dict) else []
                 techniques_str = ', '.join(techniques) if techniques else 'N/A'
-                file_name = evidence.get('file', 'N/A') if isinstance(evidence, dict) else 'N/A'
+                file_name = self._file_display_name(evidence.get('file', 'N/A')) if isinstance(evidence, dict) else 'N/A'
 
                 html += f"""
                 <div class="finding-card" style="border-left: 4px solid var(--color-medium);">
@@ -4020,7 +4072,7 @@ class ProfessionalReportGenerator:
                             {html_module.escape(example.get('description', ''))}
                         </div>
                         <div style="font-family: monospace; font-size: 11px; color: var(--text-secondary);">
-                            {html_module.escape(example.get('file', ''))}:{example.get('line', 0)}
+                            {html_module.escape(self._file_display_name(example.get('file', '')))}:{example.get('line', 0)}
                         </div>
                     </div>
 """

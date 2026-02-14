@@ -30,7 +30,7 @@ class ThreatAttribution:
         self.attribution_cache = self._load_attribution_cache()
 
         # Well-known benign extensions that should never be flagged via OSINT
-        # (they appear in security articles as comparisons/targets of impersonation)
+        # (they appear in curated lists, security comparisons, or impersonation targets)
         self.known_benign_extensions = {
             'cjpalhdlnbpafiamejdnhcphjbkeiagm',  # uBlock Origin
             'cfhdojbkjhnklbpkdaibdccddilifddb',  # Adblock Plus
@@ -43,26 +43,30 @@ class ThreatAttribution:
             'aohghmighlieiainnegkcijnfilokake',  # Google Docs Offline
         }
 
-        # Campaign / threat keywords to look for in search results
-        # NOTE: This is intentionally broad so we catch most threat writeups about
-        # malicious browser extensions, even when they use slightly different wording.
+        # Campaign / threat keywords - page must contain extension ID AND one of these
+        # to count as threat attribution (avoids false positives from benign lists e.g. awesome-BrowserRelated)
         self.campaign_keywords = [
             # Known campaigns / actors
             'darkspectre', 'dark spectre', 'zoomstealer', 'zoom stealer',
             'shadypanda', 'shady panda', 'ghostposter', 'ghost poster',
             'cacheflow', 'magnetgoblin',
-            # Generic malicious-extension descriptors
+            # Generic malicious descriptors
             'malicious extension', 'malicious chrome extension', 'chrome extension malware',
-            'browser extension malware', 'browser extension attack',
-            'spyware', 'stalkerware',
+            'browser extension malware', 'browser extension attack', 'chrome malware',
+            'malicious', 'malware', 'malware campaign',
+            'spyware', 'stalkerware', 'adware',
             'data theft', 'data stealer', 'infostealer', 'info stealer',
             'password stealer', 'credential stealer', 'credential stealing',
             'token stealer', 'session stealer', 'cookie stealer',
-            'keylogger', 'key logging',
-            # Threat-intel style labels
-            'malware campaign', 'threat actor', 'spy plugin',
-            # Research vendors / common OSINT markers
-            'layerx', 'koi security', 'browser extension attack', 'chrome malware'
+            'keylogger', 'key logging', 'exfiltrat', 'exfiltration',
+            'phishing', 'hijack', 'steal', 'stolen', 'theft',
+            # Threat-intel / IOC markers
+            'ioc', 'indicator of compromise', 'threat actor', 'spy plugin',
+            'threat intelligence', 'campaign', 'infected', 'compromised',
+            # Risk labels
+            'risky', 'scam', 'suspicious extension', 'harmful',
+            # Research vendors
+            'layerx', 'koi security', 'koi.ai'
         ]
 
         # Known security research domains (trusted sources)
@@ -213,6 +217,26 @@ class ThreatAttribution:
         except Exception as e:
             print(f"[!] DuckDuckGo search failed: {e}")
 
+        # Priority 2.5: Dorking - search extension ID + threat keywords to surface threat writeups
+        # (e.g. KOI Security blog, BleepingComputer) vs benign lists (awesome-BrowserRelated)
+        dork_queries = [
+            f'"{extension_id}" malicious',
+            f'"{extension_id}" chrome malware',
+            f'"{extension_id}" IOC',
+            f'"{extension_id}" theft',
+            f'"{extension_id}" browser extension attack',
+        ]
+        try:
+            print(f"[i] Dorking: extension ID + threat keywords...")
+            dork_urls = self._search_dorking(extension_id, dork_queries)
+            new_dork = dork_urls - all_urls_collected
+            all_urls_collected.update(dork_urls)
+            if new_dork:
+                results['search_engines_used'].append('Dorking')
+                print(f"    Found {len(new_dork)} additional URLs from dorking")
+        except Exception as e:
+            print(f"[!] Dorking search failed: {e}")
+
         # Priority 3: Only search more engines if we don't have enough results yet
         if len(all_urls_collected) < 3:
             # Search Engine 3: Bing/Ecosia
@@ -277,61 +301,62 @@ class ThreatAttribution:
                     page_text = page_response.text.lower()
 
                     # Check if extension ID is actually mentioned
-                    if extension_id.lower() in page_text:
-                        results['found_mentions'] = True
-                        article_info['extension_mentioned'] = True
+                    if extension_id.lower() not in page_text:
+                        continue
+                    article_info['extension_mentioned'] = True
 
-                        # Check for campaign keywords
-                        for keyword in self.campaign_keywords:
-                            if keyword in page_text:
-                                article_info['keywords_found'].append(keyword)
-                                if keyword not in results['keywords_found']:
-                                    results['keywords_found'].append(keyword)
+                    # Check for campaign keywords
+                    for keyword in self.campaign_keywords:
+                        if keyword in page_text:
+                            article_info['keywords_found'].append(keyword)
+                            if keyword not in results['keywords_found']:
+                                results['keywords_found'].append(keyword)
 
-                        # Check for malicious indicators WITH PROXIMITY
-                        # The extension ID must appear near malicious terms (within ~500 chars)
-                        # to avoid false positives where the extension is mentioned in a
-                        # different context on a page that also discusses malware
-                        malicious_terms = ['malicious', 'malware', 'steal', 'exfiltrate',
-                                           'data theft', 'spyware', 'adware', 'phishing', 'hijack']
-                        id_lower = extension_id.lower()
-                        id_positions = []
-                        search_start = 0
+                    # Check for malicious indicators WITH PROXIMITY
+                    malicious_terms = ['malicious', 'malware', 'steal', 'exfiltrate',
+                                       'data theft', 'spyware', 'adware', 'phishing', 'hijack']
+                    id_lower = extension_id.lower()
+                    id_positions = []
+                    search_start = 0
+                    while True:
+                        pos = page_text.find(id_lower, search_start)
+                        if pos == -1:
+                            break
+                        id_positions.append(pos)
+                        search_start = pos + 1
+
+                    proximity_window = 500
+                    for term in malicious_terms:
+                        term_start = 0
                         while True:
-                            pos = page_text.find(id_lower, search_start)
-                            if pos == -1:
+                            term_pos = page_text.find(term, term_start)
+                            if term_pos == -1:
                                 break
-                            id_positions.append(pos)
-                            search_start = pos + 1
-
-                        # Check if any malicious term appears within 500 chars of the extension ID
-                        proximity_window = 500
-                        for term in malicious_terms:
-                            term_start = 0
-                            while True:
-                                term_pos = page_text.find(term, term_start)
-                                if term_pos == -1:
+                            for id_pos in id_positions:
+                                if abs(term_pos - id_pos) <= proximity_window:
+                                    results['is_malicious'] = True
                                     break
-                                for id_pos in id_positions:
-                                    if abs(term_pos - id_pos) <= proximity_window:
-                                        results['is_malicious'] = True
-                                        break
-                                if results['is_malicious']:
-                                    break
-                                term_start = term_pos + 1
                             if results['is_malicious']:
                                 break
+                            term_start = term_pos + 1
+                        if results['is_malicious']:
+                            break
 
-                        # Detect specific campaigns
-                        if 'darkspectre' in page_text or 'dark spectre' in page_text:
-                            results['campaign_detected'] = 'DarkSpectre'
-                        elif 'zoomstealer' in page_text or 'zoom stealer' in page_text:
-                            results['campaign_detected'] = 'ZoomStealer'
-                        elif 'cacheflow' in page_text:
-                            results['campaign_detected'] = 'CacheFlow'
-                        elif 'layerx' in page_text and 'malicious' in page_text:
-                            results['campaign_detected'] = 'LayerX-Identified'
+                    # Detect specific campaigns
+                    if 'darkspectre' in page_text or 'dark spectre' in page_text:
+                        results['campaign_detected'] = 'DarkSpectre'
+                    elif 'zoomstealer' in page_text or 'zoom stealer' in page_text:
+                        results['campaign_detected'] = 'ZoomStealer'
+                    elif 'cacheflow' in page_text:
+                        results['campaign_detected'] = 'CacheFlow'
+                    elif 'layerx' in page_text and 'malicious' in page_text:
+                        results['campaign_detected'] = 'LayerX-Identified'
 
+                    # Only add to threat attribution when page has threat context
+                    # (keywords_found OR proximity malicious match) - skip benign lists like awesome-BrowserRelated
+                    has_threat_context = bool(article_info['keywords_found']) or results.get('is_malicious', False)
+                    if has_threat_context:
+                        results['found_mentions'] = True
                         results['articles'].append(article_info)
                         if is_trusted:
                             results['sources'].append({
@@ -339,12 +364,10 @@ class ThreatAttribution:
                                 'url': href,
                                 'source': self._extract_domain(href)
                             })
-
                         processed += 1
-                        # Track confirming articles for early exit
-                        if article_info['keywords_found'] or is_trusted:
-                            confirmed_articles += 1
-                        print(f"    [+] Found mention in: {self._extract_domain(href)}")
+                        confirmed_articles += 1
+                        kw_preview = ', '.join(article_info['keywords_found'][:3]) if article_info['keywords_found'] else 'proximity'
+                        print(f"    [+] Threat context in: {self._extract_domain(href)} ({kw_preview})")
 
             except Exception as e:
                 # Skip pages that fail to load
@@ -352,7 +375,7 @@ class ThreatAttribution:
 
             time.sleep(0.1)  # Reduced for faster processing
 
-        print(f"[i] Analyzed {len(all_urls_collected)} URLs, found {len(results['articles'])} with extension mentions")
+        print(f"[i] Analyzed {len(all_urls_collected)} URLs, found {len(results['articles'])} with threat context")
 
         if results['keywords_found']:
             print(f"[i] Keywords found: {', '.join(results['keywords_found'][:5])}")
@@ -413,6 +436,29 @@ class ThreatAttribution:
         except Exception as e:
             print(f"[!] DuckDuckGo error: {e}")
 
+        return urls
+
+    def _search_dorking(self, extension_id, dork_queries):
+        """Search with extension ID + threat keyword (dorking) to find threat writeups."""
+        urls = set()
+        for query in dork_queries[:3]:  # Limit to 3 dork queries for speed
+            try:
+                search_url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
+                response = self.session.get(search_url, timeout=5)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    for link in soup.find_all('a', class_='result__a'):
+                        href = link.get('href', '')
+                        title = link.get_text(strip=True)
+                        if href and 'uddg=' in href:
+                            parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                            if 'uddg' in parsed:
+                                urls.add((parsed['uddg'][0], title))
+                        elif href and not href.startswith('/'):
+                            urls.add((href, title))
+                time.sleep(0.2)
+            except Exception:
+                continue
         return urls
 
     def _search_bing(self, extension_id):

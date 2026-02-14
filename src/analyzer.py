@@ -76,17 +76,22 @@ class ChromeExtensionAnalyzer:
         self.run_dynamic = False
         self.dynamic_timeout = 30
     
-    def analyze_extension(self, extension_id, browser=BrowserType.CHROME):
+    def analyze_extension(self, extension_id, browser=BrowserType.CHROME, progress_callback=None):
         """
         Complete analysis pipeline with professional threat analysis
 
         Args:
             extension_id (str): Browser extension ID
             browser (BrowserType): Browser store (CHROME or EDGE)
+            progress_callback: Optional callable(percent, step_name, detail) for progress reporting
 
         Returns:
             dict: Comprehensive analysis results
         """
+        def _progress(pct, name, detail=""):
+            if progress_callback:
+                progress_callback(pct, name, detail)
+
         browser_name = browser.value.upper()
         print("=" * 80)
         print(f"[SCAN] {browser_name} EXTENSION SECURITY ANALYZER")
@@ -96,6 +101,7 @@ class ChromeExtensionAnalyzer:
         print(f"[+] Extension Store: {browser_name}\n")
 
         # Step 0: Fetch Store Metadata
+        _progress(5, "Store metadata", "Fetching extension info from Chrome Web Store...")
         store_name = "Edge Add-ons" if browser == BrowserType.EDGE else "Chrome Web Store"
         print(f"[STORE] STEP 0: Fetching {store_name} metadata...")
         print("-" * 80)
@@ -130,6 +136,7 @@ class ChromeExtensionAnalyzer:
             print(f"    Continuing with analysis...")
 
         # Step 1: Download
+        _progress(12, "Download", f"Downloading {browser_name} extension...")
         print(f"[DOWNLOAD] STEP 1: Downloading {browser_name} extension...")
         print("-" * 80)
         crx_path = self.downloader.download_extension(extension_id, browser=browser)
@@ -139,6 +146,7 @@ class ChromeExtensionAnalyzer:
             return None
         
         # Step 2: Unpack
+        _progress(18, "Unpack", "Extracting extension files...")
         print("\n[UNPACK] STEP 2: Unpacking extension...")
         print("-" * 80)
         extension_dir = self.unpacker.unpack(crx_path)
@@ -155,6 +163,7 @@ class ChromeExtensionAnalyzer:
             return None
 
         # Step 2.5: Host Permissions Analysis
+        _progress(22, "Permissions", "Analyzing host permissions...")
         print("\n[PERMISSIONS] STEP 2.5: Analyzing host permissions...")
         print("-" * 80)
         manifest_path = extension_dir / 'manifest.json'
@@ -188,10 +197,12 @@ class ChromeExtensionAnalyzer:
                 print(f"    [CRITICAL] Gmail surveillance module: {gm['file']} "
                       f"({gm['indicator_count']} indicators)")
 
-        # Step 3: Static Analysis
+        # Step 3: Static Analysis (longest step)
+        _progress(25, "Static analysis", "Scanning code for malicious patterns...")
         print("\n[SCAN] STEP 3: Performing static analysis...")
         print("-" * 80)
         results = self.analyzer.analyze_extension(extension_dir)
+        _progress(45, "Static analysis", "Static analysis complete.")
 
         if not results:
             print("\n[[X]] Analysis failed.")
@@ -214,6 +225,7 @@ class ChromeExtensionAnalyzer:
                 print(f"[i] Suppressed {fp_result['suppression_count']} false positive pattern(s)")
 
         # Step 4: Domain Intelligence Analysis
+        _progress(48, "Domain intelligence", "Analyzing domains for threats...")
         print("\n[DOMAIN] STEP 4: Domain intelligence analysis...")
         print("-" * 80)
         domain_intelligence = self._analyze_domain_intelligence(results)
@@ -231,6 +243,7 @@ class ChromeExtensionAnalyzer:
             print("[[OK]] No obviously malicious domains detected")
         
         # Step 5: VirusTotal Domain Reputation Check
+        _progress(52, "VirusTotal", "Checking domain reputation against security vendors...")
         print("\n[VT]  STEP 5: VirusTotal domain reputation check...")
         print("-" * 80)
         vt_results = self._check_virustotal(results)
@@ -242,6 +255,7 @@ class ChromeExtensionAnalyzer:
 
         # Step 5.5: Dynamic Network Capture (optional, --dynamic flag)
         if getattr(self, 'run_dynamic', False) and self.network_capture:
+            _progress(55, "Network capture", "Capturing extension network traffic...")
             print("\n[NETWORK] STEP 5.5: Dynamic network capture analysis...")
             print("-" * 80)
 
@@ -324,6 +338,7 @@ class ChromeExtensionAnalyzer:
             results['network_capture'] = {'available': False, 'skipped': True}
 
         # Step 6: Advanced Malware Detection
+        _progress(58, "Advanced detection", "Scanning for obfuscation and evasion...")
         print("\n[ADVANCED] STEP 6: Advanced technique detection...")
         print("-" * 80)
         advanced_findings = self.advanced_detector.run_all_detections(extension_dir)
@@ -340,6 +355,7 @@ class ChromeExtensionAnalyzer:
             print("[OK] No advanced suspicious techniques detected")
 
         # Step 6.5: Enhanced Detection (Taint Analysis, Crypto Theft, Phishing)
+        _progress(62, "Enhanced detection", "Taint analysis, crypto & phishing checks...")
         print("\n[ENHANCED] STEP 6.5: Enhanced detection (taint analysis, crypto, phishing)...")
         print("-" * 80)
         enhanced_results = self._run_enhanced_detection(extension_dir)
@@ -371,6 +387,7 @@ class ChromeExtensionAnalyzer:
             print(f"[!] CRYPTO: {len(crypto_findings)} cryptocurrency-related pattern(s) detected")
 
         # Step 6.7: Behavioral Correlation Engine
+        _progress(68, "Behavioral correlation", "Correlating threat patterns...")
         print("\n[BEHAVIORAL] STEP 6.7: Behavioral threat correlation...")
         print("-" * 80)
         behavioral_results = self.behavioral_engine.correlate(results)
@@ -409,6 +426,7 @@ class ChromeExtensionAnalyzer:
                 print(f"    IMPACT: {narrative['impact_summary'][:100]}")
 
         # Step 7: PII/Data Classification
+        _progress(72, "PII classification", "Classifying sensitive data access...")
         print("\n[PII] STEP 7: PII/data classification...")
         print("-" * 80)
         pii_analysis = self._classify_pii_exfiltration(results)
@@ -423,11 +441,13 @@ class ChromeExtensionAnalyzer:
             print("[[OK]] No sensitive data exfiltration detected")
 
         # Step 8: IOC Management
+        _progress(75, "IOC database", "Updating threat database...")
         print("\n[DB] STEP 8: Updating local analysis database...")
         print("-" * 80)
         self._update_ioc_database(results, vt_results, extension_id)
 
         # Step 8.5: Threat Attribution
+        _progress(80, "Threat attribution", "OSINT threat campaign attribution...")
         print("\n[ATTRIBUTION] STEP 8.5: Threat campaign attribution...")
         print("-" * 80)
         if getattr(self, 'skip_osint', False):
@@ -518,6 +538,7 @@ class ChromeExtensionAnalyzer:
                   f"(no known campaign match)")
 
         # Step 8.9: Supply Chain Version Diff
+        _progress(85, "Version diff", "Comparing with previous versions...")
         print("\n[VERSION] STEP 8.9: Supply chain version comparison...")
         print("-" * 80)
         version_diff = self.version_diff.compare(extension_id, results)
@@ -549,6 +570,7 @@ class ChromeExtensionAnalyzer:
         self.version_diff.store_baseline(extension_id, results)
 
         # Step 9: Generate Reports
+        _progress(92, "Report", "Generating threat intelligence report...")
         print("\n[REPORT] STEP 9: Generating professional reports...")
         print("-" * 80)
 
@@ -568,6 +590,7 @@ class ChromeExtensionAnalyzer:
         # Print Verdict
         self._print_verdict(results)
 
+        _progress(100, "Complete", "Analysis finished.")
         return results
     def analyze_vscode_extension(self, extension_identifier):
         """

@@ -1,0 +1,6 @@
+# Map AI agent commit identities to primary author so they don't appear as separate contributors
+# GitHub uses .mailmap to consolidate the Contributors tab
+debarshi17 <74458035+debarshi17@users.noreply.github.com> Cursor <cursoragent@cursor.com>
+debarshi17 <74458035+debarshi17@users.noreply.github.com> cursoragent <cursoragent@cursor.com>
+debarshi17 <74458035+debarshi17@users.noreply.github.com> Claude <claude@anthropic.com>
+debarshi17 <74458035+debarshi17@users.noreply.github.com> GitHub Copilot <copilot@github.com>

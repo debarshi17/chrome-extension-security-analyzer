@@ -140,6 +140,40 @@
             border: 1px solid rgba(239, 68, 68, 0.3);
         }
 
+        .progress-container {
+            margin-top: 16px;
+            display: none;
+        }
+
+        .progress-container.active {
+            display: block;
+        }
+
+        .progress-bar-wrapper {
+            height: 10px;
+            background: rgba(15, 23, 42, 0.6);
+            border-radius: 5px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+            border-radius: 5px;
+            transition: width 0.3s ease;
+        }
+
+        .progress-step {
+            font-size: 14px;
+            color: #94a3b8;
+            margin-top: 6px;
+        }
+
+        .progress-step strong {
+            color: #60a5fa;
+        }
+
         .spinner {
             display: inline-block;
             width: 20px;
@@ -264,6 +298,13 @@
             </p>
 
             <div id="status" class="status"></div>
+            <div id="progressContainer" class="progress-container">
+                <div class="progress-bar-wrapper">
+                    <div id="progressBar" class="progress-bar-fill" style="width: 0%"></div>
+                </div>
+                <div id="progressStep" class="progress-step"></div>
+                <button id="cancelBtn" onclick="cancelAnalysis()" style="display:none; margin-top:12px; padding:8px 20px; background:#dc2626; color:white; border:none; border-radius:8px; cursor:pointer; font-size:14px;">Cancel scan</button>
+            </div>
         </div>
 
         <div class="recent-scans" id="recentScans">
@@ -282,10 +323,16 @@
         // Load recent scans on page load
         loadRecentScans();
 
+        let pollInterval = null;
+        let currentScanExtensionId = null;
+
         async function analyze() {
             const input = document.getElementById('extensionId');
             const btn = document.getElementById('analyzeBtn');
             const status = document.getElementById('status');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressStep = document.getElementById('progressStep');
 
             const extensionId = input.value.trim().toLowerCase();
 
@@ -293,13 +340,18 @@
             if (!/^[a-z]{32}$/.test(extensionId)) {
                 status.className = 'status error';
                 status.innerHTML = '❌ Invalid extension ID. Must be exactly 32 lowercase letters.';
+                progressContainer.classList.remove('active');
                 return;
             }
 
-            // Show loading
+            // Show loading with progress bar
             btn.disabled = true;
             status.className = 'status loading';
-            status.innerHTML = '<span class="spinner"></span> Analyzing extension... This may take 30-60 seconds.';
+            status.innerHTML = '<span class="spinner"></span> Analyzing extension...';
+            progressContainer.classList.add('active');
+            progressBar.style.width = '0%';
+            progressStep.textContent = 'Starting analysis...';
+            document.getElementById('cancelBtn').style.display = 'inline-block';
 
             try {
                 const response = await fetch('/analyze', {
@@ -310,27 +362,112 @@
 
                 const data = await response.json();
 
+                if (response.ok && data.status === 'running') {
+                    currentScanExtensionId = extensionId;
+                    pollStatus(extensionId);
+                    return;
+                }
+
                 if (response.ok && data.status === 'complete') {
-                    const riskClass = getRiskClass(data.risk_level);
-                    status.className = 'status success';
-                    status.innerHTML = `
-                        ✅ Analysis complete!
-                        <span class="risk-badge ${riskClass}">${data.risk_level}</span>
-                        <span style="margin-left: 10px;">Score: ${data.risk_score}/10</span>
-                        <br>
-                        <a href="${data.report_url}" class="result-link" target="_blank">View Full Report</a>
-                    `;
-                    loadRecentScans();
+                    showComplete(data);
                 } else {
+                    stopPoll();
                     status.className = 'status error';
                     status.innerHTML = `❌ ${data.detail || data.message || 'Analysis failed'}`;
+                    progressContainer.classList.remove('active');
+                    btn.disabled = false;
                 }
             } catch (error) {
+                stopPoll();
                 status.className = 'status error';
                 status.innerHTML = `❌ Error: ${error.message}`;
-            } finally {
+                progressContainer.classList.remove('active');
                 btn.disabled = false;
             }
+        }
+
+        function pollStatus(extensionId) {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = setInterval(async () => {
+                try {
+                    const resp = await fetch(`/status/${extensionId}`);
+                    const data = await resp.json();
+
+                    const progressBar = document.getElementById('progressBar');
+                    const progressStep = document.getElementById('progressStep');
+
+                    if (data.status === 'running') {
+                        const pct = data.percent || 0;
+                        progressBar.style.width = pct + '%';
+                        const step = data.step_name || 'Processing';
+                        const detail = data.detail || '';
+                        progressStep.innerHTML = `<strong>${step}</strong>${detail ? ': ' + detail : ''}`;
+                        return;
+                    }
+
+                    stopPoll();
+                    currentScanExtensionId = null;
+                    const btn = document.getElementById('analyzeBtn');
+                    const status = document.getElementById('status');
+                    const progressContainer = document.getElementById('progressContainer');
+                    const cancelBtn = document.getElementById('cancelBtn');
+                    btn.disabled = false;
+                    cancelBtn.style.display = 'none';
+
+                    if (data.status === 'complete') {
+                        showComplete(data);
+                        progressContainer.classList.remove('active');
+                    } else if (data.status === 'cancelled') {
+                        status.className = 'status error';
+                        status.innerHTML = '⚠️ Scan cancelled.';
+                        progressContainer.classList.remove('active');
+                    } else {
+                        status.className = 'status error';
+                        status.innerHTML = `❌ ${data.message || 'Analysis failed'}`;
+                        progressContainer.classList.remove('active');
+                    }
+                } catch (e) {
+                    console.error('Poll error:', e);
+                }
+            }, 500);
+        }
+
+        function stopPoll() {
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
+        async function cancelAnalysis() {
+            const extensionId = currentScanExtensionId;
+            if (!extensionId) return;
+            try {
+                const resp = await fetch(`/cancel/${extensionId}`, { method: 'POST' });
+                const data = await resp.json();
+                if (data.status === 'cancelled') {
+                    document.getElementById('cancelBtn').style.display = 'none';
+                }
+            } catch (e) {
+                console.error('Cancel failed:', e);
+            }
+        }
+
+        function showComplete(data) {
+            const status = document.getElementById('status');
+            const btn = document.getElementById('analyzeBtn');
+            document.getElementById('cancelBtn').style.display = 'none';
+            const riskClass = getRiskClass(data.risk_level);
+            status.className = 'status success';
+            status.innerHTML = `
+                ✅ Analysis complete!
+                <span class="risk-badge ${riskClass}">${data.risk_level}</span>
+                <span style="margin-left: 10px;">Score: ${data.risk_score}/10</span>
+                <br>
+                <a href="${data.report_url}" class="result-link" target="_blank">View Full Report</a>
+            `;
+            btn.disabled = false;
+            loadRecentScans();
         }
 
         function getRiskClass(level) {
