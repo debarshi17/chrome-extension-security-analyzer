@@ -2,6 +2,12 @@ config.json
 *.key
 .env
 
+# VSCode extension analyzer (private feature - not yet public)
+src/vscode_*.py
+
+# VSCode test fixtures
+test_fixtures/
+
 # Local development notes
 dev-notes/
 *.local.md

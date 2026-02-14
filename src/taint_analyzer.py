@@ -168,6 +168,9 @@ class TaintAnalyzer:
         self.all_sinks.update(TaintSink.CODE_EXECUTION_SINKS)
         self.all_sinks.update(TaintSink.CLIPBOARD_SINKS)
 
+    # esprima can hang or consume excessive memory on files larger than this
+    MAX_AST_PARSE_SIZE = 2 * 1024 * 1024  # 2 MiB
+
     def analyze_file(self, file_path: str, content: str) -> List[Dict]:
         """
         Analyze a JavaScript file for taint flows.
@@ -183,6 +186,11 @@ class TaintAnalyzer:
         self.source_code = content
         self.tainted_variables.clear()
         self.taint_flows.clear()
+
+        # Guard: skip full AST parse for very large files (esprima can hang)
+        if len(content) > self.MAX_AST_PARSE_SIZE:
+            self._regex_fallback_analysis(content)
+            return [flow.to_dict() for flow in self.taint_flows]
 
         try:
             # Parse JavaScript into AST

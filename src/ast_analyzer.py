@@ -6,8 +6,27 @@ Resolves CONFIG variables to actual URLs
 import esprima
 import json
 import re
+import time
 from pathlib import Path
 from collections import defaultdict
+
+# #region agent log
+import os
+_DEBUG_LOG_PATH = r'c:\Users\user2\Documents\GitHub\chrome-extension-security-analyzer\.cursor\debug.log'
+def _ast_log(msg, data=None, hypothesis_id=None):
+    try:
+        os.makedirs(os.path.dirname(_DEBUG_LOG_PATH), exist_ok=True)
+        with open(_DEBUG_LOG_PATH, 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'message': msg, 'data': data or {}, 'timestamp': round(time.time() * 1000), 'location': 'ast_analyzer.py', 'hypothesisId': hypothesis_id}, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+# #endregion
+
+# Max file size for full AST parsing (larger files skip AST to avoid hangs)
+MAX_FILE_SIZE_FOR_AST = 2 * 1024 * 1024  # 2 MiB
+# Max recursion depth in AST traversal to prevent runaway / stack overflow
+MAX_TRAVERSE_DEPTH = 10000
+
 
 class JavaScriptASTAnalyzer:
     """Advanced JavaScript analysis with config resolution"""
@@ -19,8 +38,10 @@ class JavaScriptASTAnalyzer:
         self.chrome_api_usage = []
         self.config_values = {}  # Store resolved config values
         
-    def analyze_directory(self, extension_dir):
-        """Analyze all JavaScript files in an extension directory"""
+    def analyze_directory(self, extension_dir, progress_callback=None):
+        """Analyze all JavaScript files in an extension directory.
+        progress_callback: optional callable invoked once per file (for unified progress bar).
+        """
         
         extension_dir = Path(extension_dir)
         all_results = {
@@ -32,9 +53,14 @@ class JavaScriptASTAnalyzer:
             'suspicious_patterns': []
         }
         
-        # Find all JavaScript files
-        js_files = list(extension_dir.rglob('*.js'))
-        
+        # Find all JavaScript files, excluding node_modules and similar dependency trees
+        all_js = list(extension_dir.rglob('*.js'))
+        js_files = [p for p in all_js if 'node_modules' not in p.parts and 'bower_components' not in p.parts]
+        if len(js_files) != len(all_js):
+            print(f"[AST] Skipping {len(all_js) - len(js_files)} JS file(s) under node_modules/bower_components")
+        # #region agent log
+        _ast_log('AST analyze_directory started', {'js_file_count': len(js_files), 'large_files': [{'path': str(p.relative_to(extension_dir)), 'size_kb': p.stat().st_size // 1024} for p in js_files if p.stat().st_size > 512 * 1024]}, 'H5')
+        # #endregion
         print(f"[AST] Analyzing {len(js_files)} JavaScript files with AST parser...")
         
         # STEP 1: Extract CONFIG values first
@@ -47,13 +73,25 @@ class JavaScriptASTAnalyzer:
                 print(f"[AST]   * {key} -> {value}")
         
         # STEP 2: Analyze each file
-        for js_file in js_files:
+        for idx, js_file in enumerate(js_files):
             try:
-                with open(js_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                
-                # Analyze this file
-                file_results = self.analyze_file(str(js_file.relative_to(extension_dir)), content)
+                # #region agent log
+                _rel = str(js_file.relative_to(extension_dir))
+                _sz = js_file.stat().st_size
+                _t0 = time.perf_counter()
+                _ast_log('AST file start', {'index': idx, 'path': _rel, 'size_bytes': _sz, 'size_kb': _sz // 1024}, 'H3')
+                # #endregion
+                # Skip full AST for very large files to avoid parse/traverse hangs
+                if _sz > MAX_FILE_SIZE_FOR_AST:
+                    print(f"[AST] Skipping AST for large file ({_sz // 1024} KiB): {_rel}")
+                    file_results = self._analyze_file_skipped_large(_rel, _sz)
+                else:
+                    with open(js_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    file_results = self.analyze_file(_rel, content)
+                # #region agent log
+                _ast_log('AST file done', {'path': _rel, 'elapsed_ms': round((time.perf_counter() - _t0) * 1000)}, 'H1')
+                # #endregion
                 
                 # Aggregate results
                 all_results['files_analyzed'] += 1
@@ -62,6 +100,9 @@ class JavaScriptASTAnalyzer:
                 all_results['chrome_api_abuse'].extend(file_results.get('chrome_api_abuse', []))
                 all_results['obfuscation'].extend(file_results.get('obfuscation', []))
                 all_results['suspicious_patterns'].extend(file_results.get('suspicious_patterns', []))
+                
+                if progress_callback:
+                    progress_callback()
                 
             except Exception as e:
                 print(f"[AST] Error analyzing {js_file.name}: {e}")
@@ -78,6 +119,9 @@ class JavaScriptASTAnalyzer:
         
         return all_results
     
+    # Max size for config extraction (avoid reading huge files and ReDoS on regex)
+    _MAX_CONFIG_FILE_SIZE = 512 * 1024  # 512 KiB
+
     def _extract_config_values(self, js_files):
         """Extract CONFIG variable values from JavaScript files"""
         
@@ -85,10 +129,12 @@ class JavaScriptASTAnalyzer:
             # Only check config files
             if 'config' not in js_file.name.lower():
                 continue
-            
             try:
+                size = js_file.stat().st_size
+                if size > self._MAX_CONFIG_FILE_SIZE:
+                    continue  # Skip huge files to avoid hang / ReDoS
                 with open(js_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
+                    content = f.read(self._MAX_CONFIG_FILE_SIZE)
                 
                 # Extract base URLs using regex (simpler than AST for this)
                 
@@ -125,6 +171,21 @@ class JavaScriptASTAnalyzer:
             except Exception as e:
                 continue
     
+    def _analyze_file_skipped_large(self, file_path, size_bytes):
+        """Return empty AST results for files too large to parse (avoids hang/infinite loop)."""
+        return {
+            'file': file_path,
+            'network_calls': [],
+            'data_exfiltration': [],
+            'chrome_api_abuse': [],
+            'obfuscation': [{
+                'type': 'Skipped (file too large)',
+                'description': f'AST analysis skipped for file >{MAX_FILE_SIZE_FOR_AST // (1024*1024)} MiB to avoid timeout',
+                'severity': 'low'
+            }],
+            'suspicious_patterns': []
+        }
+    
     def analyze_file(self, file_path, content):
         """Analyze a JavaScript file using AST"""
         
@@ -138,11 +199,18 @@ class JavaScriptASTAnalyzer:
         }
         
         try:
+            # #region agent log
+            _ast_log('AST parseScript before', {'file': file_path, 'content_len': len(content)}, 'H1')
+            _t_parse = time.perf_counter()
+            # #endregion
             # Parse JavaScript into AST
             ast = esprima.parseScript(content, {'loc': True, 'range': True, 'tolerant': True})
+            # #region agent log
+            _ast_log('AST parseScript after', {'file': file_path, 'elapsed_ms': round((time.perf_counter() - _t_parse) * 1000)}, 'H1')
+            # #endregion
             
             # Analyze the AST
-            self._traverse_ast(ast, content, results)
+            self._traverse_ast(ast, content, results, depth=0)
             
         except Exception as e:
             # If parsing fails, likely obfuscated or invalid JS
@@ -155,9 +223,14 @@ class JavaScriptASTAnalyzer:
         
         return results
     
-    def _traverse_ast(self, node, source_code, results):
+    def _traverse_ast(self, node, source_code, results, depth=0):
         """Recursively traverse the AST and detect patterns"""
-        
+        # #region agent log
+        if depth == 2000 or depth == 50000:
+            _ast_log('AST traverse depth', {'file': results.get('file'), 'depth': depth}, 'H2')
+        # #endregion
+        if depth > MAX_TRAVERSE_DEPTH:
+            return
         if node is None or not hasattr(node, 'type'):
             return
         
@@ -185,9 +258,9 @@ class JavaScriptASTAnalyzer:
             if isinstance(value, list):
                 for item in value:
                     if hasattr(item, 'type'):
-                        self._traverse_ast(item, source_code, results)
+                        self._traverse_ast(item, source_code, results, depth + 1)
             elif hasattr(value, 'type'):
-                self._traverse_ast(value, source_code, results)
+                self._traverse_ast(value, source_code, results, depth + 1)
     
     def _analyze_call_expression(self, node, source_code, results):
         """Analyze function calls (fetch, XMLHttpRequest, etc.)"""

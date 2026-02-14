@@ -371,6 +371,16 @@ class NetworkCaptureAnalyzer:
         # Console messages (for detecting eval/injection)
         self._console_messages = []
 
+        # === V2: API MONITORING & CANARY TOKENS ===
+        self._api_calls = []                # Chrome API calls intercepted via Proxy
+        self._canary_tokens = {
+            'session': 'CANARY_SESSION_4a7b2c',
+            'cookie': 'CANARY_COOKIE_9f3e1d',
+            'history_url': 'https://canary-site-8x2k.example.com/banking',
+        }
+        self._canary_detected = []          # Canary values found in outbound traffic
+        self._dom_mutations_v2 = []         # CDP DOM mutation events
+
     def analyze(self, extension_dir, extension_id, timeout=30, host_permission_domains=None):
         """
         Launch Chromium with the extension, browse trigger pages, capture network traffic.
@@ -481,6 +491,9 @@ class NetworkCaptureAnalyzer:
             # Give extension time to initialize
             time.sleep(2)
 
+            # V2: Inject Chrome API mocks and proxy interception
+            self._inject_api_monitoring()
+
             self._browse_trigger_pages(timeout)
 
             elapsed = time.time() - start_time
@@ -503,6 +516,9 @@ class NetworkCaptureAnalyzer:
 
             # Extract new domains for VT
             new_domains = self._extract_new_domains(extension_requests)
+
+            # V2: Check for canary tokens in outbound requests
+            self._detect_canary_leaks(extension_requests)
 
             # === ENHANCED DETECTION ANALYSIS ===
             enhanced_detection = self._get_enhanced_detection_summary()
@@ -563,6 +579,10 @@ class NetworkCaptureAnalyzer:
                 'summary': summary,
                 # Enhanced detection details
                 'enhanced_detection': enhanced_detection,
+                # V2: API monitoring and canary results
+                'api_calls': self._api_calls,
+                'canary_detected': self._canary_detected,
+                'dom_mutations': self._dom_mutations_v2,
             }
 
         except Exception as e:
@@ -649,6 +669,14 @@ class NetworkCaptureAnalyzer:
 
             # Log handler for additional context
             client.on('Log.entryAdded', self._on_log_entry)
+
+            # V2: Enable DOM domain for mutation tracking
+            try:
+                client.send('DOM.enable')
+                client.on('DOM.childNodeInserted', self._on_dom_child_inserted)
+                client.on('DOM.attributeModified', self._on_dom_attribute_modified)
+            except Exception:
+                pass  # DOM domain may not be available in all contexts
 
             # Store client reference for script injection
             self._current_cdp_client = client
@@ -744,6 +772,10 @@ class NetworkCaptureAnalyzer:
 
         message = ' '.join(message_parts)
 
+        # V2: Parse API monitor log entries
+        if message.startswith('[API_MONITOR]'):
+            self._parse_api_monitor_log(message)
+
         self._console_messages.append({
             'type': call_type,
             'message': message[:500],
@@ -832,6 +864,198 @@ class NetworkCaptureAnalyzer:
                     'severity': 'CRITICAL',
                     'timestamp': time.time()
                 })
+
+    # ------------------------------------------------------------------
+    # V2: API Monitoring, Canary Tokens, DOM Mutations
+    # ------------------------------------------------------------------
+
+    def _inject_api_monitoring(self):
+        """Inject Chrome API mocks and Proxy-based monitoring into the extension context.
+
+        This enables:
+        1. Synthetic API responses (force-trigger dormant malware)
+        2. Logging of all Chrome API calls (see what extension accesses)
+        3. Canary token injection (definitive proof of data theft)
+        """
+        canary_session = self._canary_tokens['session']
+        canary_cookie = self._canary_tokens['cookie']
+        canary_url = self._canary_tokens['history_url']
+
+        # JavaScript to inject into the extension's context
+        injection_script = f"""
+        (function() {{
+            // === CANARY TOKEN INJECTION ===
+            // Set synthetic cookies via document.cookie (visible to content scripts)
+            try {{
+                document.cookie = "session_id={canary_session}; path=/; max-age=3600";
+                document.cookie = "auth_token={canary_cookie}; path=/; max-age=3600";
+            }} catch(e) {{}}
+
+            // === CHROME API PROXY INTERCEPTION ===
+            // Wrap sensitive Chrome APIs with logging Proxies
+            var _apiLog = [];
+
+            function wrapChromeAPI(obj, path) {{
+                if (!obj || typeof obj !== 'object') return;
+                try {{
+                    return new Proxy(obj, {{
+                        get: function(target, prop) {{
+                            var val = target[prop];
+                            if (typeof val === 'function') {{
+                                return function() {{
+                                    var args = Array.from(arguments);
+                                    var logEntry = {{
+                                        api: path + '.' + prop,
+                                        args_preview: JSON.stringify(args).substring(0, 200),
+                                        timestamp: Date.now()
+                                    }};
+                                    _apiLog.push(logEntry);
+                                    console.log('[API_MONITOR] ' + JSON.stringify(logEntry));
+                                    return val.apply(target, arguments);
+                                }};
+                            }}
+                            return val;
+                        }}
+                    }});
+                }} catch(e) {{
+                    return obj;
+                }}
+            }}
+
+            // Wrap sensitive APIs if they exist
+            try {{
+                if (typeof chrome !== 'undefined') {{
+                    if (chrome.cookies) chrome.cookies = wrapChromeAPI(chrome.cookies, 'chrome.cookies');
+                    if (chrome.tabs) chrome.tabs = wrapChromeAPI(chrome.tabs, 'chrome.tabs');
+                    if (chrome.history) chrome.history = wrapChromeAPI(chrome.history, 'chrome.history');
+                    if (chrome.identity) chrome.identity = wrapChromeAPI(chrome.identity, 'chrome.identity');
+                    if (chrome.storage && chrome.storage.local)
+                        chrome.storage.local = wrapChromeAPI(chrome.storage.local, 'chrome.storage.local');
+                }}
+            }} catch(e) {{}}
+
+            // === TIME MANIPULATION ===
+            // Advance Date.now() by 30 days to trigger time-bomb payloads
+            try {{
+                var _realNow = Date.now;
+                var _offset = 30 * 24 * 60 * 60 * 1000; // 30 days
+                Date.now = function() {{ return _realNow() + _offset; }};
+                var _origDate = Date;
+                // Also override new Date()
+                Date = function() {{
+                    if (arguments.length === 0) {{
+                        return new _origDate(_realNow() + _offset);
+                    }}
+                    return new (Function.prototype.bind.apply(_origDate, [null].concat(Array.from(arguments))))();
+                }};
+                Date.now = function() {{ return _realNow() + _offset; }};
+                Date.prototype = _origDate.prototype;
+            }} catch(e) {{}}
+        }})();
+        """
+
+        try:
+            # Inject into all existing pages
+            for page in self._browser.pages:
+                try:
+                    page.evaluate(injection_script)
+                except Exception:
+                    pass
+
+            # Also try to inject via CDP into the service worker context
+            try:
+                targets = self._browser.pages[0].context.new_cdp_session(
+                    self._browser.pages[0]
+                )
+                targets.send('Runtime.evaluate', {
+                    'expression': injection_script,
+                    'includeCommandLineAPI': True,
+                })
+            except Exception:
+                pass
+
+            print("[NETWORK] V2: Chrome API monitoring + canary tokens injected")
+        except Exception as e:
+            print(f"[NETWORK] V2: API monitoring injection failed: {e}")
+
+    def _detect_canary_leaks(self, extension_requests):
+        """Check if any canary token values appear in outbound request data.
+
+        If a canary value appears in POST body, query params, or headers,
+        it's definitive proof of data theft.
+        """
+        canary_values = list(self._canary_tokens.values())
+
+        for req in extension_requests:
+            url = req.get('url', '')
+            post_data = req.get('post_data', '') or ''
+            headers = json.dumps(req.get('headers', {}))
+
+            for canary in canary_values:
+                if canary in url or canary in post_data or canary in headers:
+                    self._canary_detected.append({
+                        'canary_value': canary,
+                        'found_in': 'url' if canary in url else
+                                    'post_data' if canary in post_data else 'headers',
+                        'request_url': url[:200],
+                        'method': req.get('method', 'GET'),
+                        'severity': 'CRITICAL',
+                        'description': (
+                            'DEFINITIVE DATA THEFT: Synthetic canary token was '
+                            'injected into browser state and detected in outbound '
+                            'network request. Extension is stealing user data.'
+                        ),
+                    })
+
+        if self._canary_detected:
+            print(f"[!] CANARY ALERT: {len(self._canary_detected)} canary token(s) "
+                  f"leaked in outbound requests!")
+
+    def _on_dom_child_inserted(self, params):
+        """Track DOM child node insertions (script injection, overlay creation)."""
+        parent_id = params.get('parentNodeId', 0)
+        node = params.get('node', {})
+        node_name = node.get('nodeName', '').lower()
+
+        # Flag script injections and iframe insertions
+        if node_name in ('script', 'iframe', 'object', 'embed'):
+            self._dom_mutations_v2.append({
+                'type': 'node_insertion',
+                'node_name': node_name,
+                'parent_id': parent_id,
+                'attributes': node.get('attributes', [])[:10],
+                'severity': 'high' if node_name == 'script' else 'medium',
+                'timestamp': time.time(),
+            })
+
+    def _on_dom_attribute_modified(self, params):
+        """Track DOM attribute modifications (event handler injection)."""
+        node_id = params.get('nodeId', 0)
+        name = params.get('name', '')
+        value = params.get('value', '')
+
+        # Flag event handler attribute injections (onreset, onerror, onclick with code)
+        if name.startswith('on') and value:
+            self._dom_mutations_v2.append({
+                'type': 'attribute_injection',
+                'attribute': name,
+                'value_preview': value[:100],
+                'node_id': node_id,
+                'severity': 'critical' if name in ('onreset', 'onerror', 'onload') else 'high',
+                'timestamp': time.time(),
+            })
+
+    def _parse_api_monitor_log(self, text):
+        """Parse [API_MONITOR] log entries from console messages."""
+        if not text.startswith('[API_MONITOR]'):
+            return None
+        try:
+            payload = text[len('[API_MONITOR] '):]
+            entry = json.loads(payload)
+            self._api_calls.append(entry)
+            return entry
+        except (json.JSONDecodeError, ValueError):
+            return None
 
     # ------------------------------------------------------------------
     # Traffic filtering
@@ -1152,6 +1376,10 @@ class NetworkCaptureAnalyzer:
 
         Returns: 'MALICIOUS', 'SUSPICIOUS', 'LOW_RISK', or 'CLEAN'
         """
+        # --- V2: Canary token detection (definitive proof) ---
+        if self._canary_detected:
+            return 'MALICIOUS'
+
         # --- Hard escalation check (overrides everything) ---
         hard_escalated, escalation_detail = self._check_hard_escalation(scored, ws_suspicious)
         if hard_escalated:

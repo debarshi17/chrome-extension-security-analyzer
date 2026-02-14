@@ -6,10 +6,23 @@ Based on DarkSpectre/ZoomStealer campaign analysis
 
 import json
 import re
+import time
 from pathlib import Path
 from collections import defaultdict
 import math
 from ast_analyzer import JavaScriptASTAnalyzer
+
+# #region agent log
+import os
+_DEBUG_LOG_PATH = r'c:\Users\user2\Documents\GitHub\chrome-extension-security-analyzer\.cursor\debug.log'
+def _static_log(msg, data=None, hypothesis_id=None):
+    try:
+        os.makedirs(os.path.dirname(_DEBUG_LOG_PATH), exist_ok=True)
+        with open(_DEBUG_LOG_PATH, 'a', encoding='utf-8') as _f:
+            _f.write(json.dumps({'message': msg, 'data': data or {}, 'timestamp': round(time.time() * 1000), 'location': 'static_analyzer.py', 'hypothesisId': hypothesis_id}, ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+# #endregion
 
 
 class EnhancedStaticAnalyzer:
@@ -1324,29 +1337,86 @@ class EnhancedStaticAnalyzer:
                 'description': 'Code execution near multi-line comments - may extract code from comments',
                 'technique': 'Comment obfuscation'
             },
+
+            # ── Remote Iframe C2 Architecture ──────────────────────────
+            {
+                'name': 'Remote Iframe UI Injection',
+                'pattern': r'createElement\s*\(["\']iframe["\']\)[^}]{0,150}\.src\s*=\s*["\']https?://(?!chrome-extension://)[^"\']+["\']',
+                'severity': 'critical',
+                'description': 'Extension UI loaded from remote server — enables server-side control without Chrome Store updates. REMOTE C2 ARCHITECTURE.',
+                'technique': 'Remote C2 UI'
+            },
+            {
+                'name': 'Fullscreen Remote Iframe',
+                'pattern': r'(100vw|100vh|100%)[^}]{0,120}iframe[^}]{0,120}https?://|iframe[^}]{0,120}https?://[^}]{0,120}(100vw|100vh|position\s*:\s*fixed)',
+                'severity': 'critical',
+                'description': 'Fullscreen iframe to external domain — complete UI takeover with remote control capability',
+                'technique': 'Remote C2 UI'
+            },
+            {
+                'name': 'Dynamic Remote Iframe Source',
+                'pattern': r'createElement\s*\(["\']iframe["\']\)[^}]{0,150}\.src\s*=\s*[a-zA-Z_$]\w*',
+                'severity': 'high',
+                'description': 'Iframe created with dynamic/variable source — may load remote C2 UI at runtime',
+                'technique': 'Remote C2 UI'
+            },
         ]
 
         # PRE-COMPILE all regex patterns for better performance
         # This is done once at initialization instead of on every scan
+        #
+        # Wide-gap patterns ([\s\S]{0,N} where N >= 200) are split into
+        # a two-pass search: first match the anchor, then search a bounded
+        # window for the tail.  This prevents catastrophic backtracking on
+        # large files where the [\s\S]{0,N} quantifier would cause the
+        # engine to try exponentially many paths before failing.
         self._compiled_patterns = []
+        self._WIDE_GAP_RE = re.compile(r'\[\\s\\S\]\{0,(\d+)\}')
+
         for pattern_def in self.malicious_patterns:
+            raw = pattern_def['pattern']
             try:
-                compiled = re.compile(pattern_def['pattern'], re.IGNORECASE)
-                self._compiled_patterns.append({
-                    'name': pattern_def['name'],
-                    'compiled': compiled,
-                    'severity': pattern_def['severity'],
-                    'description': pattern_def['description'],
-                    'technique': pattern_def.get('technique', 'Unknown')
-                })
+                # Detect wide-gap patterns that risk catastrophic backtracking
+                gap_match = self._WIDE_GAP_RE.search(raw)
+                max_gap = int(gap_match.group(1)) if gap_match else 0
+
+                if max_gap >= 200:
+                    # Split into anchor + tail for two-pass matching
+                    parts = self._WIDE_GAP_RE.split(raw, maxsplit=1)
+                    anchor = re.compile(parts[0], re.IGNORECASE)
+                    tail = re.compile(parts[2], re.IGNORECASE) if len(parts) > 2 else None
+                    self._compiled_patterns.append({
+                        'name': pattern_def['name'],
+                        'compiled': anchor,
+                        'tail': tail,
+                        'max_gap': max_gap,
+                        'severity': pattern_def['severity'],
+                        'description': pattern_def['description'],
+                        'technique': pattern_def.get('technique', 'Unknown'),
+                        'two_pass': True,
+                    })
+                else:
+                    compiled = re.compile(raw, re.IGNORECASE)
+                    self._compiled_patterns.append({
+                        'name': pattern_def['name'],
+                        'compiled': compiled,
+                        'severity': pattern_def['severity'],
+                        'description': pattern_def['description'],
+                        'technique': pattern_def.get('technique', 'Unknown'),
+                        'two_pass': False,
+                    })
             except re.error as e:
                 print(f"[!] Warning: Failed to compile pattern '{pattern_def['name']}': {e}")
+
+    # Cap file size for pattern-scan read to avoid slow regex on huge bundles (bytes)
+    _MAX_READ_SIZE_FOR_SCAN = 5 * 1024 * 1024  # 5 MiB
 
     def _read_file_cached(self, file_path):
         """Read file content with caching to avoid multiple reads
 
         OPTIMIZATION: Files are often read multiple times by different analyzers.
         This cache stores content in memory for the duration of analysis.
+        Very large files are truncated to _MAX_READ_SIZE_FOR_SCAN to avoid hangs.
 
         Args:
             file_path: Path to file
@@ -1361,7 +1431,7 @@ class EnhancedStaticAnalyzer:
 
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
+                content = f.read(self._MAX_READ_SIZE_FOR_SCAN)
                 self._file_cache[file_str] = content
                 return content
         except Exception as e:
@@ -1635,13 +1705,40 @@ class EnhancedStaticAnalyzer:
         
         # Analyze settings overrides
         results['settings_overrides'] = self.analyze_settings_overrides(manifest)
-        
-        # Scan code files
-        js_files = list(extension_dir.rglob('*.js'))
+
+        # Analyze extension's own CSP policy
+        results['csp_analysis'] = self._analyze_csp_policy(manifest)
+
+        # Scan code files (exclude node_modules/bower_components to avoid huge dependency trees)
+        all_js = list(extension_dir.rglob('*.js'))
+        js_files = [p for p in all_js if 'node_modules' not in p.parts and 'bower_components' not in p.parts]
+        if len(js_files) != len(all_js):
+            print(f"[+] Skipping {len(all_js) - len(js_files)} JS file(s) under node_modules/bower_components")
+        # #region agent log
+        _static_log('static analyze_extension js_files', {'count': len(js_files), 'large': [{'path': str(p.relative_to(extension_dir)), 'size_kb': p.stat().st_size // 1024} for p in js_files if p.stat().st_size > 512 * 1024]}, 'H5')
+        # #endregion
         print(f"[+] Scanning {len(js_files)} JavaScript files...")
         # Run AST analysis (CRITICAL - shows exact POST destinations)
         print(f"[+] Running AST analysis...")
-        results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir)
+        # #region agent log
+        _t_ast = time.perf_counter()
+        # #endregion
+        try:
+            from tqdm import tqdm
+            _use_progress = True
+        except ImportError:
+            _use_progress = False
+        if _use_progress:
+            # One progress bar for static analysis: 0-50% AST, 50-100% pattern scan
+            _total_steps = 2 * len(js_files)
+            _pbar = tqdm(total=_total_steps, desc="Static analysis", unit="file", leave=True, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} ({percentage:3.0f}%)")
+            _pbar.update(0)
+            results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir, progress_callback=lambda: _pbar.update(1))
+        else:
+            results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir)
+        # #region agent log
+        _static_log('static AST analyze_directory returned', {'elapsed_ms': round((time.perf_counter() - _t_ast) * 1000)}, 'H1')
+        # #endregion
         
         # Merge AST findings into malicious_patterns
         for exfil in results['ast_results'].get('data_exfiltration', []):
@@ -1660,8 +1757,14 @@ class EnhancedStaticAnalyzer:
             })
         
         # OPTIMIZED: Read files once and cache them for all analysis passes
-        for js_file in js_files:
+        for idx, js_file in enumerate(js_files):
             try:
+                # #region agent log
+                _rel = str(js_file.relative_to(extension_dir))
+                _sz = js_file.stat().st_size
+                _static_log('static scan file start', {'index': idx, 'path': _rel, 'size_kb': _sz // 1024}, 'H3')
+                _t_scan = time.perf_counter()
+                # #endregion
                 # Use cached file reader to avoid multiple reads
                 code = self._read_file_cached(js_file)
                 if code is None:
@@ -1681,10 +1784,18 @@ class EnhancedStaticAnalyzer:
                 obfuscation = self.detect_obfuscation(code)
                 if obfuscation['is_obfuscated']:
                     results['obfuscation_indicators'][relative_path] = obfuscation
-
+                # #region agent log
+                _static_log('static scan file done', {'path': _rel, 'elapsed_ms': round((time.perf_counter() - _t_scan) * 1000)}, 'H4')
+                # #endregion
+                if _use_progress:
+                    _pbar.update(1)
             except Exception as e:
                 print(f"[!] Error scanning {js_file.name}: {e}")
+                if _use_progress:
+                    _pbar.update(1)  # count failed file so percentage stays correct
 
+        if _use_progress:
+            _pbar.close()
         # Clear file cache after analysis to free memory
         self._clear_file_cache()
         
@@ -1862,8 +1973,224 @@ class EnhancedStaticAnalyzer:
             })
             print("  [FLAG] COMBO WARNING: proxy (traffic routing control)")
 
+        # ========== PERMISSION ATTACK-PATH SCORING ==========
+        # Score dangerous permission combinations that enable specific attack paths.
+        # Each path maps to a real-world attack capability.
+        attack_paths = []
+        attack_path_score = 0.0
+
+        # 1. Universal Session Theft: cookies + all_urls
+        if 'cookies' in permission_set and has_all_urls:
+            attack_paths.append({
+                'name': 'Universal Session Theft',
+                'permissions': ['cookies', '<all_urls>'],
+                'severity': 'CRITICAL',
+                'score': 3.0,
+                'description': 'Can steal session cookies from ANY website for account takeover',
+            })
+            attack_path_score += 3.0
+
+        # 2. Universal Code Injection: scripting + all_urls
+        if 'scripting' in permission_set and has_all_urls:
+            attack_paths.append({
+                'name': 'Universal Code Injection',
+                'permissions': ['scripting', '<all_urls>'],
+                'severity': 'CRITICAL',
+                'score': 3.0,
+                'description': 'Can inject arbitrary JavaScript into ANY webpage',
+            })
+            attack_path_score += 3.0
+
+        # 3. Traffic Interception/MitM: webRequest + webRequestBlocking + all_urls
+        has_blocking = 'webrequestblocking' in permission_set
+        if ('webrequest' in permission_set or has_blocking) and has_all_urls:
+            path_score = 3.0 if has_blocking else 2.0
+            attack_paths.append({
+                'name': 'Traffic Interception' + (' / MitM' if has_blocking else ''),
+                'permissions': ['webRequest', 'webRequestBlocking', '<all_urls>'] if has_blocking else ['webRequest', '<all_urls>'],
+                'severity': 'CRITICAL' if has_blocking else 'HIGH',
+                'score': path_score,
+                'description': 'Can intercept' + (', modify, or block' if has_blocking else '') + ' ALL web traffic',
+            })
+            attack_path_score += path_score
+
+        # 4. Extension Kill Chain: management + scripting
+        if 'management' in permission_set and ('scripting' in permission_set or has_all_urls):
+            attack_paths.append({
+                'name': 'Extension Kill Chain',
+                'permissions': ['management', 'scripting'],
+                'severity': 'HIGH',
+                'score': 2.0,
+                'description': 'Can disable security extensions and inject replacement code',
+            })
+            attack_path_score += 2.0
+
+        # 5. Crypto Address Swap: clipboardRead + clipboardWrite
+        if 'clipboardread' in permission_set and 'clipboardwrite' in permission_set:
+            attack_paths.append({
+                'name': 'Crypto Address Swap',
+                'permissions': ['clipboardRead', 'clipboardWrite'],
+                'severity': 'HIGH',
+                'score': 1.5,
+                'description': 'Can read clipboard for wallet addresses and replace with attacker address',
+            })
+            attack_path_score += 1.5
+
+        # 6. System Escape: nativeMessaging + any dangerous capability
+        if 'nativemessaging' in permission_set:
+            attack_paths.append({
+                'name': 'Native System Escape',
+                'permissions': ['nativeMessaging'],
+                'severity': 'HIGH',
+                'score': 2.0,
+                'description': 'Can communicate with native binaries, escaping browser sandbox',
+            })
+            attack_path_score += 2.0
+
+        # 7. Full Surveillance: tabs + all_urls + history
+        if 'tabs' in permission_set and has_all_urls and 'history' in permission_set:
+            attack_paths.append({
+                'name': 'Full Browsing Surveillance',
+                'permissions': ['tabs', '<all_urls>', 'history'],
+                'severity': 'HIGH',
+                'score': 2.0,
+                'description': 'Can monitor all tab activity, URL history, and page content',
+            })
+            attack_path_score += 2.0
+
+        # 8. Screen Recording: desktopCapture OR tabCapture
+        if 'desktopcapture' in permission_set or 'tabcapture' in permission_set:
+            attack_paths.append({
+                'name': 'Screen / Tab Recording',
+                'permissions': ['desktopCapture' if 'desktopcapture' in permission_set else 'tabCapture'],
+                'severity': 'HIGH',
+                'score': 2.0,
+                'description': 'Can record screen or tab content including sensitive information',
+            })
+            attack_path_score += 2.0
+
+        permission_analysis['attack_paths'] = attack_paths
+        permission_analysis['attack_path_score'] = min(attack_path_score, 10.0)
+
+        if attack_paths:
+            print(f"\n  [ATTACK PATHS] {len(attack_paths)} enabled:")
+            for ap in attack_paths:
+                print(f"    [{ap['severity']}] {ap['name']} (score +{ap['score']})")
+
         return permission_analysis
     
+    def _analyze_csp_policy(self, manifest):
+        """Parse and score the extension's own Content Security Policy.
+
+        A lax or absent CSP enables eval-based attacks and remote code loading.
+        Returns dict with findings list and a 0-5 risk score.
+        """
+        # MV2: string, MV3: dict with extension_pages / sandbox
+        raw_csp = manifest.get('content_security_policy', '')
+        mv3_csp = ''
+        if isinstance(raw_csp, dict):
+            mv3_csp = raw_csp.get('extension_pages', '')
+            sandbox_csp = raw_csp.get('sandbox', '')
+            raw_csp = mv3_csp or sandbox_csp
+        csp = raw_csp if isinstance(raw_csp, str) else ''
+
+        findings = []
+        score = 0
+
+        mv = manifest.get('manifest_version', 2)
+
+        if not csp:
+            # MV2 without CSP is risky; MV3 has default strict CSP
+            if mv == 2:
+                findings.append({
+                    'name': 'No Content Security Policy defined (MV2)',
+                    'severity': 'high',
+                    'description': (
+                        'Manifest V2 extension has no CSP. Default MV2 CSP allows '
+                        'unsafe-eval. Define a strict CSP to prevent code injection.'
+                    ),
+                    'technique': 'CSP weakness',
+                })
+                score += 3
+            else:
+                # MV3 has strict default - absence is fine
+                findings.append({
+                    'name': 'Default CSP (MV3 strict)',
+                    'severity': 'low',
+                    'description': 'Using MV3 default CSP which blocks unsafe-eval.',
+                    'technique': 'CSP policy',
+                })
+        else:
+            # Parse directives
+            csp_lower = csp.lower()
+
+            if "'unsafe-eval'" in csp_lower or 'unsafe-eval' in csp_lower:
+                findings.append({
+                    'name': 'CSP allows unsafe-eval',
+                    'severity': 'high',
+                    'description': (
+                        "Extension's CSP includes 'unsafe-eval', enabling eval(), "
+                        'new Function(), and other dynamic code execution. This '
+                        'defeats the primary protection against code injection.'
+                    ),
+                    'technique': 'CSP weakness',
+                })
+                score += 3
+
+            if "'unsafe-inline'" in csp_lower or 'unsafe-inline' in csp_lower:
+                findings.append({
+                    'name': 'CSP allows unsafe-inline',
+                    'severity': 'medium',
+                    'description': (
+                        "Extension's CSP includes 'unsafe-inline', allowing inline "
+                        'scripts. This weakens XSS protections.'
+                    ),
+                    'technique': 'CSP weakness',
+                })
+                score += 1
+
+            # Wildcard or overly broad script-src
+            if "script-src *" in csp_lower or "script-src https:" in csp_lower:
+                findings.append({
+                    'name': 'CSP allows wildcard script sources',
+                    'severity': 'high',
+                    'description': (
+                        'CSP script-src allows scripts from any HTTPS source. '
+                        'Attacker can load malicious scripts from any domain.'
+                    ),
+                    'technique': 'CSP weakness',
+                })
+                score += 2
+
+            # Check for data: URI in script-src (enables inline base64 scripts)
+            if "data:" in csp_lower and "script-src" in csp_lower:
+                findings.append({
+                    'name': 'CSP allows data: URI scripts',
+                    'severity': 'medium',
+                    'description': (
+                        'CSP allows data: URIs in script-src, enabling base64-encoded '
+                        'inline scripts which can bypass content filtering.'
+                    ),
+                    'technique': 'CSP weakness',
+                })
+                score += 1
+
+            # Strict CSP is a positive signal
+            if score == 0 and csp:
+                findings.append({
+                    'name': 'Strict CSP defined',
+                    'severity': 'low',
+                    'description': 'Extension defines a restrictive CSP without unsafe directives.',
+                    'technique': 'CSP policy',
+                })
+
+        return {
+            'raw_csp': csp,
+            'manifest_version': mv,
+            'findings': findings,
+            'score': min(score, 5),
+        }
+
     def analyze_settings_overrides(self, manifest):
         """Analyze chrome_settings_overrides for hijacking"""
         overrides = manifest.get('chrome_settings_overrides', {})
@@ -1966,6 +2293,30 @@ class EnhancedStaticAnalyzer:
 
         return False
 
+    @staticmethod
+    def _safe_pattern_finditer(code, anchor_re, tail_re, max_gap):
+        """Two-pass regex matching that avoids catastrophic backtracking.
+
+        Instead of a single regex with a wide [\\s\\S]{0,N} gap (N >= 200),
+        we first find all anchor matches, then search a bounded window
+        after each anchor for the tail pattern.  This keeps the regex engine
+        workload linear in file size.
+        """
+        for anchor_match in anchor_re.finditer(code):
+            window_end = min(anchor_match.end() + max_gap, len(code))
+            window = code[anchor_match.end():window_end]
+            tail_match = tail_re.search(window)
+            if tail_match:
+                # Build a synthetic match-like object so callers can use
+                # .start(), .end(), .group(0) the same way.
+                full_start = anchor_match.start()
+                full_end = anchor_match.end() + tail_match.end()
+                yield type('_M', (), {
+                    'start': lambda s=full_start: s,
+                    'end':   lambda e=full_end: e,
+                    'group': lambda n=0, t=code[full_start:full_end]: t if n == 0 else '',
+                })()
+
     def scan_code(self, code, file_path):
         """Scan code for malicious patterns with extended context for code snippets
 
@@ -1982,7 +2333,13 @@ class EnhancedStaticAnalyzer:
 
         # Use pre-compiled patterns for better performance
         for pattern_def in self._compiled_patterns:
-            matches = pattern_def['compiled'].finditer(code)
+            # Two-pass matching for wide-gap patterns to avoid backtracking
+            if pattern_def.get('two_pass') and pattern_def.get('tail'):
+                matches = self._safe_pattern_finditer(
+                    code, pattern_def['compiled'],
+                    pattern_def['tail'], pattern_def['max_gap'])
+            else:
+                matches = pattern_def['compiled'].finditer(code)
 
             for match in matches:
                 # Skip matches inside comments to reduce false positives
@@ -2161,44 +2518,156 @@ class EnhancedStaticAnalyzer:
         return None
     
     def calculate_enhanced_risk_score(self, results):
-        """Enhanced risk calculation (will be updated after VT check)"""
-        score = 0
-        
-        # Settings Override = CRITICAL (0-5 points)
+        """
+        Multi-component risk scoring model.
+
+        Components (0-10 total):
+          - Permission risk     (0-2.5): Attack-path based + individual scores
+          - Code analysis       (0-2.5): Severity-weighted pattern + AST findings
+          - Behavioral corr.    (0-3.0): Compound threat pattern scores
+          - Infrastructure      (0-2.0): Settings overrides + campaign + CSP
+
+        Adjustments:
+          - Positive signals: Clean store metadata, narrow scope -> up to -1.5
+          - Malice floor: Critical behavioral correlation -> minimum 5.0
+        """
+        breakdown = {}
+
+        # ---------- Component 1: Permission Risk (0-2.5) ----------
+        perms = results.get('permissions', {})
+        attack_path_score = perms.get('attack_path_score', 0)
+        individual_perm = (
+            len(perms.get('high_risk', [])) * 0.4 +
+            len(perms.get('medium_risk', [])) * 0.15
+        )
+        # Blend attack-path and individual: attack-path dominates
+        perm_component = min(attack_path_score * 0.4 + individual_perm, 2.5)
+        breakdown['permissions'] = round(perm_component, 2)
+
+        # ---------- Component 2: Code Analysis (0-2.5) ----------
+        patterns = results.get('malicious_patterns', [])
+        crit_count = sum(1 for p in patterns if p.get('severity') == 'critical')
+        high_count = sum(1 for p in patterns if p.get('severity') == 'high')
+        med_count = sum(1 for p in patterns if p.get('severity') == 'medium')
+
+        code_raw = crit_count * 0.5 + high_count * 0.2 + med_count * 0.05
+        # Density bonus for large finding sets
+        if len(patterns) > 20:
+            code_raw += 0.5
+        elif len(patterns) > 10:
+            code_raw += 0.25
+
+        code_component = min(code_raw, 2.5)
+        breakdown['code_analysis'] = round(code_component, 2)
+
+        # ---------- Component 3: Behavioral Correlations (0-3.0) ----------
+        bc = results.get('behavioral_correlations', {})
+        bc_summary = bc.get('summary', {}) if isinstance(bc, dict) else {}
+        bc_crit = bc_summary.get('critical', 0)
+        bc_high = bc_summary.get('high', 0)
+        bc_med = bc_summary.get('medium', 0)
+
+        bc_raw = bc_crit * 1.2 + bc_high * 0.6 + bc_med * 0.2
+        bc_component = min(bc_raw, 3.0)
+        breakdown['behavioral_correlations'] = round(bc_component, 2)
+
+        # ---------- Component 4: Infrastructure (0-2.0) ----------
+        infra = 0.0
+
+        # Settings overrides
         settings = results.get('settings_overrides', {})
         if settings.get('search_hijacking'):
             if settings['search_hijacking'].get('has_affiliate_params'):
-                score += 5
+                infra += 1.5
             else:
-                score += 4
+                infra += 1.0
         elif settings.get('homepage_hijacking') or settings.get('startup_hijacking'):
-            score += 3
-        elif settings.get('newtab_hijacking'):
-            score += 2
-        
-        # Campaign Attribution (0-2 points)
+            infra += 0.8
+
+        # Campaign attribution
         if results.get('campaign_attribution'):
             campaign = results['campaign_attribution']
-            if campaign['confidence'] == 'HIGH':
-                score += 2
+            if campaign.get('confidence') == 'HIGH':
+                infra += 0.5
             else:
-                score += 1
-        
-        # Permission risk (0-2 points)
-        perm_score = (
-            len(results['permissions']['high_risk']) * 0.5 +
-            len(results['permissions']['medium_risk']) * 0.2
-        )
-        score += min(perm_score, 2)
-        
-        # Malicious patterns (0-1 point)
-        pattern_score = sum(
-            2 if p['severity'] == 'high' else 1 if p['severity'] == 'medium' else 0.5
-            for p in results['malicious_patterns']
-        ) / 10
-        score += min(pattern_score, 1)
-        
-        return min(score, 10)
+                infra += 0.25
+
+        # CSP weakness
+        csp = results.get('csp_analysis', {})
+        csp_score = csp.get('score', 0)
+        if csp_score >= 3:
+            infra += 0.5
+        elif csp_score >= 1:
+            infra += 0.2
+
+        infra_component = min(infra, 2.0)
+        breakdown['infrastructure'] = round(infra_component, 2)
+
+        # ---------- Positive Signals (up to -1.5) ----------
+        positive_reduction = 0.0
+        store = results.get('store_metadata', {})
+
+        # High user count = more trust
+        user_count = store.get('user_count', 0) or 0
+        if user_count > 100000:
+            positive_reduction += 0.5
+        elif user_count > 10000:
+            positive_reduction += 0.3
+
+        # Verified author
+        if store.get('author_verified'):
+            positive_reduction += 0.2
+
+        # Very narrow permission scope (no high-risk perms, no attack paths)
+        if not perms.get('high_risk') and not perms.get('attack_paths'):
+            positive_reduction += 0.3
+
+        # Suppress positive signals if critical correlations exist
+        if bc_crit > 0:
+            positive_reduction = 0.0
+
+        positive_reduction = min(positive_reduction, 1.5)
+        breakdown['positive_signals'] = round(-positive_reduction, 2)
+
+        # ---------- Combine ----------
+        raw_score = (perm_component + code_component + bc_component
+                     + infra_component - positive_reduction)
+
+        # ---------- Malice Floor (V3 — tighter) ----------
+        # Behavioral correlation floors
+        if bc_crit >= 2:
+            raw_score = max(raw_score, 7.0)  # At least HIGH
+        elif bc_crit >= 1:
+            raw_score = max(raw_score, 5.5)  # Solid MEDIUM
+        elif bc_high >= 2:
+            raw_score = max(raw_score, 4.0)  # At least MEDIUM
+
+        # Attack narrative confidence floor
+        narrative = results.get('attack_narrative', {})
+        if narrative.get('confidence') == 'high':
+            raw_score = max(raw_score, 7.0)
+        elif narrative.get('confidence') == 'medium':
+            raw_score = max(raw_score, 5.0)
+
+        # Remote C2 architecture = automatic HIGH
+        bc_data = results.get('behavioral_correlations', {})
+        bc_corrs = bc_data.get('correlations', []) if isinstance(bc_data, dict) else []
+        if any(c.get('attack_type') == 'remote_c2_extension' for c in bc_corrs):
+            raw_score = max(raw_score, 7.5)
+
+        # Sensitive target multiplier
+        sensitive = results.get('sensitive_targets', {})
+        st_multiplier = sensitive.get('risk_multiplier', 1.0) if isinstance(sensitive, dict) else 1.0
+        if st_multiplier > 1.0 and raw_score >= 3.0:
+            raw_score = min(raw_score * st_multiplier, 10.0)
+        breakdown['sensitive_target_multiplier'] = st_multiplier
+
+        final_score = min(max(raw_score, 0), 10.0)
+
+        # Store breakdown for debugging
+        results['risk_breakdown'] = breakdown
+
+        return round(final_score, 1)
     
     def get_risk_level(self, score):
         """Convert risk score to level"""
@@ -2213,30 +2682,236 @@ class EnhancedStaticAnalyzer:
         else:
             return 'MINIMAL'
     
+    def generate_attack_narrative(self, results):
+        """Synthesize findings into an attack-chain narrative.
+
+        Maps: Permissions -> Data Collection -> Exfiltration -> Infrastructure -> Impact.
+        Returns a dict with ``attack_chain``, ``data_flow``, ``impact_summary``,
+        and ``confidence`` (low / medium / high).
+        """
+        narrative = {
+            'attack_chain': [],
+            'data_flow': [],
+            'impact_summary': '',
+            'confidence': 'low',
+        }
+
+        perms = results.get('permissions', {})
+        patterns = results.get('malicious_patterns', [])
+        techniques = set(p.get('technique', '') for p in patterns)
+        domains = results.get('domain_analysis', [])
+        sensitive = results.get('sensitive_targets', {})
+        sensitive_targets = sensitive.get('targets', []) if isinstance(sensitive, dict) else []
+
+        # ── Stage 1: ACCESS ──
+        has_all_urls = '<all_urls>' in perms.get('all', [])
+        if has_all_urls:
+            narrative['attack_chain'].append({
+                'stage': 'ACCESS',
+                'capability': 'Can access ALL websites including authenticated sessions',
+                'risk': 'critical',
+            })
+        elif sensitive_targets:
+            targeted = ', '.join(set(t['domain'] for t in sensitive_targets[:5]))
+            narrative['attack_chain'].append({
+                'stage': 'ACCESS',
+                'capability': f'Targets sensitive services: {targeted}',
+                'risk': 'high',
+            })
+
+        # ── Stage 2: COLLECT ──
+        collection_techniques = techniques & {
+            'DOM surveillance', 'Form interception', 'Keystroke logging',
+            'Screen capture/surveillance', 'Cookie theft', 'Page content theft',
+            'Input monitoring', 'CSS keylogging', 'Hidden field harvesting',
+            'Credential theft', 'Token theft', 'Autofill manipulation',
+        }
+        if collection_techniques:
+            narrative['attack_chain'].append({
+                'stage': 'COLLECT',
+                'capability': f'Harvests data via: {", ".join(sorted(collection_techniques))}',
+                'risk': 'high',
+            })
+
+        # ── Stage 3: EXFILTRATE ──
+        exfil_techniques = techniques & {
+            'Data exfiltration', 'Beacon exfiltration', 'WebSocket exfiltration',
+            'Network request', 'Remote C2 UI', 'Binary data exfiltration',
+            'Encrypted exfiltration', 'Screenshot exfiltration',
+        }
+        if exfil_techniques:
+            ext_domains = [d for d in domains if not d.get('is_first_party')]
+            destinations = [d.get('domain', '?') for d in ext_domains[:5]]
+            narrative['attack_chain'].append({
+                'stage': 'EXFILTRATE',
+                'capability': f'Sends data externally via: {", ".join(sorted(exfil_techniques))}',
+                'destinations': destinations,
+                'risk': 'critical',
+            })
+
+        # ── Stage 4: PERSIST / C2 ──
+        persist_techniques = techniques & {
+            'Remote C2 UI', 'Delayed activation', 'Anti-debugging',
+            'Sandbox detection', 'Automation detection',
+        }
+        if persist_techniques:
+            narrative['attack_chain'].append({
+                'stage': 'PERSIST',
+                'capability': f'Evasion / persistence via: {", ".join(sorted(persist_techniques))}',
+                'risk': 'high',
+            })
+
+        # ── Confidence & summary ──
+        chain_len = len(narrative['attack_chain'])
+        if chain_len >= 3:
+            narrative['confidence'] = 'high'
+            coll_str = ', '.join(sorted(collection_techniques)[:3]) if collection_techniques else 'unknown'
+            narrative['impact_summary'] = (
+                f'COMPLETE SURVEILLANCE PIPELINE: Extension can access '
+                f'{"ALL websites" if has_all_urls else "targeted services"} -> '
+                f'collect {coll_str} -> '
+                f'exfiltrate to external servers. '
+                f'This enables theft of corporate data, credentials, and browsing activity.'
+            )
+        elif chain_len >= 2:
+            narrative['confidence'] = 'medium'
+            narrative['impact_summary'] = (
+                'PARTIAL ATTACK CAPABILITY: Multiple components of a data theft '
+                'pipeline detected. Manual review recommended to assess actual risk.'
+            )
+        elif chain_len == 1:
+            narrative['impact_summary'] = (
+                'Single-stage capability detected. May be benign, but warrants review.'
+            )
+
+        return narrative
+
+    def classify_threat(self, results):
+        """Classify the extension into a threat archetype based on all findings.
+
+        Returns dict with classification, summary, and dominant attack types.
+        """
+        bc = results.get('behavioral_correlations', {})
+        correlations = bc.get('correlations', []) if isinstance(bc, dict) else []
+        attack_types = [c.get('attack_type') for c in correlations]
+        attack_set = set(attack_types)
+
+        # Map attack types to threat archetypes
+        archetype_map = {
+            'session_hijacking': 'SESSION_HIJACKER',
+            'credential_theft': 'CREDENTIAL_STEALER',
+            'surveillance': 'SURVEILLANCE_AGENT',
+            'data_exfiltration': 'DATA_EXFILTRATOR',
+            'remote_code_exec': 'REMOTE_CODE_EXEC',
+            'wallet_hijack': 'CRYPTO_THIEF',
+            'search_hijack': 'SEARCH_HIJACKER',
+            'fingerprinting': 'TRACKER',
+            'tracking': 'TRACKER',
+            'extension_manipulation': 'EXTENSION_MANIPULATOR',
+            'staged_payload': 'STAGED_MALWARE',
+            'phishing_overlay': 'PHISHING_ATTACKER',
+            'traffic_mitm': 'TRAFFIC_INTERCEPTOR',
+            'c2_channel': 'C2_AGENT',
+            'evasive_malware': 'EVASIVE_MALWARE',
+            'system_escape': 'SYSTEM_COMPROMISER',
+            'oauth_theft': 'CREDENTIAL_STEALER',
+            'remote_c2_extension': 'REMOTE_C2_LOADER',
+        }
+
+        # Determine primary archetype (highest severity first)
+        primary = 'UNKNOWN'
+        for corr in sorted(correlations,
+                           key=lambda c: {'critical': 3, 'high': 2, 'medium': 1}.get(
+                               c.get('severity', ''), 0),
+                           reverse=True):
+            at = corr.get('attack_type', '')
+            if at in archetype_map:
+                primary = archetype_map[at]
+                break
+
+        # Secondary archetypes
+        all_archetypes = list(set(
+            archetype_map.get(at, 'UNKNOWN') for at in attack_types
+            if at in archetype_map
+        ))
+
+        # Risk level influences classification
+        risk_level = results.get('risk_level', 'UNKNOWN')
+
+        if not correlations:
+            if risk_level in ('CRITICAL', 'HIGH'):
+                classification = 'SUSPICIOUS_HIGH_RISK'
+                summary = ('High risk score from individual findings but no compound '
+                           'threat patterns detected. Manual review recommended.')
+            elif risk_level == 'MEDIUM':
+                classification = 'MODERATE_RISK'
+                summary = 'Moderate risk signals detected. Review recommended.'
+            else:
+                classification = 'LOW_RISK'
+                summary = 'No significant threat indicators detected.'
+        else:
+            crit_count = sum(1 for c in correlations if c['severity'] == 'critical')
+            if crit_count >= 2:
+                classification = 'MALICIOUS_INDICATORS'
+                summary = (f'Multiple critical threat chains detected: '
+                           f'{", ".join(all_archetypes[:3])}. '
+                           f'Strong indicators of malicious intent.')
+            elif crit_count == 1:
+                classification = 'HIGH_RISK_SUSPICIOUS'
+                summary = (f'Critical threat pattern detected ({primary}). '
+                           f'Extension exhibits capabilities consistent with malware.')
+            else:
+                classification = 'ELEVATED_RISK'
+                summary = (f'Behavioral patterns detected ({", ".join(all_archetypes[:2])}). '
+                           f'Capabilities warrant investigation.')
+
+        return {
+            'classification': classification,
+            'primary_archetype': primary,
+            'all_archetypes': all_archetypes,
+            'summary': summary,
+            'attack_types': list(attack_set),
+            'correlation_count': len(correlations),
+        }
+
     def update_risk_with_virustotal(self, results, vt_results):
-        """Update risk score based on VirusTotal results"""
-        
-        # Add VT results to analysis
+        """Update risk score based on VirusTotal results.
+
+        Scoring requires vendor consensus to avoid false positives.
+        Domains flagged by only 1-2 of 90+ vendors (e.g. huggingface.co,
+        fb.me) are given LOW_CONFIDENCE tags and minimal penalty.
+        """
         results['virustotal_results'] = vt_results
-        
-        # Recalculate risk based on VT findings
+
         vt_penalty = 0
-        
+
         for vt_result in vt_results:
             if not vt_result.get('available') or not vt_result.get('known'):
                 continue
-            
+
             threat_level = vt_result.get('threat_level', 'CLEAN')
-            
+            if threat_level == 'CLEAN':
+                continue
+
+            # Use actual detection count for graduated penalty
+            stats = vt_result.get('stats', {})
+            malicious_count = stats.get('malicious', 0)
+
             if threat_level == 'MALICIOUS':
-                vt_penalty += 3  # CRITICAL penalty
+                if malicious_count >= 5:
+                    vt_penalty += 3.0   # Strong consensus — real threat
+                elif malicious_count >= 3:
+                    vt_penalty += 1.5   # Moderate signal
+                    vt_result['confidence'] = 'MODERATE'
+                else:
+                    vt_penalty += 0.5   # Weak signal — flag but don't nuke score
+                    vt_result['confidence'] = 'LOW'
             elif threat_level == 'SUSPICIOUS':
-                vt_penalty += 1.5
-        
-        # Update risk score
+                vt_penalty += 0.5
+
         results['risk_score'] = min(results['risk_score'] + vt_penalty, 10)
         results['risk_level'] = self.get_risk_level(results['risk_score'])
-        
+
         return results
     
     def save_report(self, results, output_dir='reports'):

@@ -1,6 +1,7 @@
 """
 Main Analyzer CLI - Professional Edition with VirusTotal Integration
 Enhanced with domain intelligence and professional reporting
+Supports Chrome, Edge, and VSCode extension analysis
 """
 
 import argparse
@@ -22,12 +23,25 @@ from taint_analyzer import TaintAnalyzer
 from threat_attribution import ThreatAttribution
 from false_positive_filter import FalsePositiveFilter
 from host_permissions_analyzer import HostPermissionsAnalyzer
+from behavioral_engine import BrowserBehavioralEngine
+from version_diff import VersionDiffAnalyzer
+from sensitive_target_detector import SensitiveTargetDetector
+from campaign_detector import CampaignFingerprinter
 
 try:
     from network_capture import NetworkCaptureAnalyzer
     NETWORK_CAPTURE_AVAILABLE = True
 except ImportError:
     NETWORK_CAPTURE_AVAILABLE = False
+
+# VSCode extension analysis modules
+try:
+    from vscode_downloader import VSCodeExtensionDownloader
+    from vscode_unpacker import VSCodeExtensionUnpacker
+    from vscode_analyzer import VSCodeStaticAnalyzer
+    VSCODE_AVAILABLE = True
+except ImportError:
+    VSCODE_AVAILABLE = False
 
 class ChromeExtensionAnalyzer:
     """Main analyzer orchestrator with professional-grade analysis"""
@@ -51,6 +65,10 @@ class ChromeExtensionAnalyzer:
         self.taint_analyzer = TaintAnalyzer()
         self.wallet_detector = WalletHijackDetector()
         self.phishing_detector = PhishingDetector()
+        self.behavioral_engine = BrowserBehavioralEngine()
+        self.version_diff = VersionDiffAnalyzer()
+        self.sensitive_target_detector = SensitiveTargetDetector()
+        self.campaign_fingerprinter = CampaignFingerprinter()
 
         # Runtime flags (can be overridden after construction)
         self.skip_vt = False
@@ -157,6 +175,19 @@ class ChromeExtensionAnalyzer:
             for category, domains in list(host_permissions['sensitive_access'].items())[:2]:
                 print(f"    • {category.replace('_', ' ').title()}: {len(domains)} domain(s)")
 
+        # Step 2.6: Sensitive Target Detection
+        sensitive_results = self.sensitive_target_detector.analyze(manifest, extension_dir)
+        if sensitive_results.get('targets'):
+            cats = sensitive_results.get('categories', [])
+            print(f"\n[SENSITIVE] {len(sensitive_results['targets'])} sensitive target(s) detected: "
+                  f"{', '.join(cats)}")
+            for t in sensitive_results['targets'][:5]:
+                print(f"    [{t['severity']}] {t['category']}: {t['domain']}")
+        if sensitive_results.get('gmail_module'):
+            for gm in sensitive_results['gmail_module']:
+                print(f"    [CRITICAL] Gmail surveillance module: {gm['file']} "
+                      f"({gm['indicator_count']} indicators)")
+
         # Step 3: Static Analysis
         print("\n[SCAN] STEP 3: Performing static analysis...")
         print("-" * 80)
@@ -166,9 +197,10 @@ class ChromeExtensionAnalyzer:
             print("\n[[X]] Analysis failed.")
             return None
 
-        # Add store metadata and host permissions to results
+        # Add store metadata, host permissions, and sensitive targets to results
         results['store_metadata'] = store_metadata
         results['host_permissions'] = host_permissions
+        results['sensitive_targets'] = sensitive_results
 
         # Apply false positive filtering to malicious pattern detections
         raw_patterns = results.get('malicious_patterns', [])
@@ -252,7 +284,7 @@ class ChromeExtensionAnalyzer:
 
                 if summary.get('beaconing_detected'):
                     beacons = network_results.get('beaconing', [])
-                    print(f"[!] BEACONING: {len(beacons)} endpoint(s) hit repeatedly (C2 indicator)")
+                    print(f"[!] BEACONING: {len(beacons)} endpoint(s) hit repeatedly (periodic communication detected)")
 
                 if summary.get('post_nav_exfil_detected'):
                     pn = network_results.get('post_nav_exfil', [])
@@ -292,7 +324,7 @@ class ChromeExtensionAnalyzer:
             results['network_capture'] = {'available': False, 'skipped': True}
 
         # Step 6: Advanced Malware Detection
-        print("\n[ADVANCED] STEP 6: Advanced malware detection...")
+        print("\n[ADVANCED] STEP 6: Advanced technique detection...")
         print("-" * 80)
         advanced_findings = self.advanced_detector.run_all_detections(extension_dir)
         results['advanced_detection'] = advanced_findings
@@ -300,12 +332,12 @@ class ChromeExtensionAnalyzer:
         # Update risk score based on advanced detection
         if advanced_findings['summary']['critical_findings'] > 0:
             results['risk_score'] = min(10.0, results['risk_score'] + 3.0)
-            print(f"[!] CRITICAL: {advanced_findings['summary']['critical_findings']} confirmed malware technique(s) detected!")
+            print(f"[!] CRITICAL: {advanced_findings['summary']['critical_findings']} high-risk technique(s) detected!")
         elif advanced_findings['summary']['high_findings'] > 0:
             results['risk_score'] = min(10.0, results['risk_score'] + 1.5)
             print(f"[!] HIGH: {advanced_findings['summary']['high_findings']} suspicious technique(s) detected")
         else:
-            print("[[OK]] No advanced malware techniques detected")
+            print("[OK] No advanced suspicious techniques detected")
 
         # Step 6.5: Enhanced Detection (Taint Analysis, Crypto Theft, Phishing)
         print("\n[ENHANCED] STEP 6.5: Enhanced detection (taint analysis, crypto, phishing)...")
@@ -338,6 +370,44 @@ class ChromeExtensionAnalyzer:
         if crypto_findings:
             print(f"[!] CRYPTO: {len(crypto_findings)} cryptocurrency-related pattern(s) detected")
 
+        # Step 6.7: Behavioral Correlation Engine
+        print("\n[BEHAVIORAL] STEP 6.7: Behavioral threat correlation...")
+        print("-" * 80)
+        behavioral_results = self.behavioral_engine.correlate(results)
+        results['behavioral_correlations'] = behavioral_results
+
+        bc_summary = behavioral_results.get('summary', {})
+        if bc_summary.get('critical', 0) > 0:
+            print(f"[!] CRITICAL: {bc_summary['critical']} critical threat chain(s) detected!")
+            for corr in behavioral_results.get('correlations', []):
+                if corr['severity'] == 'critical':
+                    print(f"    -> {corr['name']}: {corr['evidence'][:80]}")
+        elif bc_summary.get('high', 0) > 0:
+            print(f"[!] HIGH: {bc_summary['high']} high-risk behavioral pattern(s)")
+            for corr in behavioral_results.get('correlations', []):
+                if corr['severity'] == 'high':
+                    print(f"    -> {corr['name']}")
+        elif bc_summary.get('total_correlations', 0) > 0:
+            print(f"[i] {bc_summary['total_correlations']} behavioral pattern(s) detected")
+        else:
+            print("[[OK]] No compound threat patterns detected")
+
+        # Update risk score based on behavioral correlations
+        if bc_summary.get('critical', 0) > 0:
+            results['risk_score'] = min(10.0, results['risk_score'] + 3.0)
+        elif bc_summary.get('high', 0) > 0:
+            results['risk_score'] = min(10.0, results['risk_score'] + 1.5)
+
+        # Step 6.8: Attack Narrative
+        narrative = self.analyzer.generate_attack_narrative(results)
+        results['attack_narrative'] = narrative
+        if narrative.get('confidence') in ('high', 'medium'):
+            print(f"\n[NARRATIVE] Attack chain confidence: {narrative['confidence'].upper()}")
+            for stage in narrative.get('attack_chain', []):
+                print(f"    [{stage['risk']}] {stage['stage']}: {stage['capability'][:80]}")
+            if narrative.get('impact_summary'):
+                print(f"    IMPACT: {narrative['impact_summary'][:100]}")
+
         # Step 7: PII/Data Classification
         print("\n[PII] STEP 7: PII/data classification...")
         print("-" * 80)
@@ -353,7 +423,7 @@ class ChromeExtensionAnalyzer:
             print("[[OK]] No sensitive data exfiltration detected")
 
         # Step 8: IOC Management
-        print("\n[IOC] STEP 8: Updating IOC database...")
+        print("\n[DB] STEP 8: Updating local analysis database...")
         print("-" * 80)
         self._update_ioc_database(results, vt_results, extension_id)
 
@@ -374,22 +444,22 @@ class ChromeExtensionAnalyzer:
             attribution_found = attribution.get('attribution_found', False)
 
             if confidence == 'CONFIRMED':
-                # Database match - CRITICAL
-                print(f"[!] CRITICAL: Extension found in known malicious database!")
+                # Database match - external source confirmed
+                print(f"[!] CRITICAL: Extension found in known threat database!")
                 print(f"    Campaign: {attribution.get('campaign_name', 'Unknown')}")
                 print(f"    Threat Actor: {attribution.get('threat_actor', 'Unknown')}")
                 results['risk_score'] = min(10.0, results['risk_score'] + 4.0)
                 results['risk_level'] = 'CRITICAL'
             elif confidence == 'HIGH' and attribution_found:
                 # Campaign detected via web search
-                print(f"[!] HIGH: Campaign detected via OSINT web search!")
+                print(f"[!] HIGH: Campaign attribution detected via OSINT web search")
                 print(f"    Campaign: {attribution.get('campaign_name', 'Unknown')}")
                 results['risk_score'] = min(10.0, results['risk_score'] + 3.0)
                 if results['risk_level'] not in ['CRITICAL']:
                     results['risk_level'] = 'HIGH'
             elif confidence == 'MEDIUM' and attribution_found:
-                # Malicious indicators found via web search
-                print(f"[!] MEDIUM: Malicious indicators found in web search results")
+                # Suspicious indicators found via web search
+                print(f"[!] MEDIUM: Suspicious indicators found in web search results")
                 results['risk_score'] = min(10.0, results['risk_score'] + 2.0)
                 if results['risk_level'] not in ['CRITICAL', 'HIGH']:
                     results['risk_level'] = 'HIGH'
@@ -402,27 +472,402 @@ class ChromeExtensionAnalyzer:
                     first_query = attribution['search_queries'][0]
                     print(f"    Search: {first_query['search_url']}")
 
+        # Step 8.7: Final Risk Recalculation with all signals
+        # Recalculate with behavioral correlations now included
+        results['risk_score'] = self.analyzer.calculate_enhanced_risk_score(results)
+        results['risk_level'] = self.analyzer.get_risk_level(results['risk_score'])
+        results['threat_classification'] = self.analyzer.classify_threat(results)
+
+        # OSINT / threat attribution should act as a *floor* on risk:
+        # if external threat intelligence says the extension is malicious,
+        # never downgrade below HIGH/CRITICAL even if local signals are weaker.
+        attribution = results.get('threat_attribution') or {}
+        if attribution.get('attribution_found'):
+            conf = attribution.get('confidence', 'NONE')
+            if conf == 'CONFIRMED':
+                # Known malicious in our database → always CRITICAL, high score floor
+                results['risk_score'] = max(results['risk_score'], 9.0)
+                results['risk_level'] = 'CRITICAL'
+            elif conf in ('HIGH', 'MEDIUM'):
+                # Strong OSINT evidence → at least HIGH risk
+                results['risk_score'] = max(results['risk_score'], 7.5)
+                if results['risk_level'] not in ('CRITICAL', 'HIGH'):
+                    results['risk_level'] = 'HIGH'
+
+        print(f"\n[SCORE] Final Risk: {results['risk_score']:.1f}/10 ({results['risk_level']})")
+        tc = results['threat_classification']
+        if tc['classification'] in ('MALICIOUS_INDICATORS', 'HIGH_RISK_SUSPICIOUS'):
+            print(f"[!] Classification: {tc['classification']}")
+            print(f"    {tc['summary']}")
+        elif tc['classification'] == 'ELEVATED_RISK':
+            print(f"[i] Classification: {tc['classification']}")
+            print(f"    {tc['summary']}")
+
+        # Step 8.8: Campaign Fingerprinting
+        campaign_fp = self.campaign_fingerprinter.fingerprint_extension(
+            extension_dir, results)
+        results['campaign_fingerprint'] = campaign_fp
+        if campaign_fp.get('matched_campaigns'):
+            print(f"\n[CAMPAIGN] Campaign matches detected!")
+            for mc in campaign_fp['matched_campaigns']:
+                print(f"    [{mc['confidence']}] {mc['name']}")
+                if mc.get('description'):
+                    print(f"        {mc['description'][:80]}")
+        elif campaign_fp.get('infra_fingerprint'):
+            print(f"\n[CAMPAIGN] Infra fingerprint: {campaign_fp['infra_fingerprint']} "
+                  f"(no known campaign match)")
+
+        # Step 8.9: Supply Chain Version Diff
+        print("\n[VERSION] STEP 8.9: Supply chain version comparison...")
+        print("-" * 80)
+        version_diff = self.version_diff.compare(extension_id, results)
+        results['version_diff'] = version_diff
+
+        if version_diff.get('has_baseline'):
+            print(f"[+] Comparing v{version_diff.get('old_version', '?')} -> "
+                  f"v{version_diff.get('new_version', '?')}")
+            print(f"    Baseline from: {version_diff.get('baseline_date', '?')}")
+
+            if version_diff.get('change_count', 0) > 0:
+                sc_level = version_diff.get('supply_chain_level', 'LOW')
+                print(f"[!] {version_diff['change_count']} change(s) detected "
+                      f"(Supply chain risk: {sc_level})")
+                for change in version_diff['changes']:
+                    print(f"    [{change['severity'].upper()}] {change['description']}")
+
+                # Boost risk score for supply chain issues
+                sc_risk = version_diff.get('supply_chain_risk', 0)
+                if sc_risk >= 2.5:
+                    results['risk_score'] = min(10.0, results['risk_score'] + sc_risk * 0.5)
+                    results['risk_level'] = self.analyzer.get_risk_level(results['risk_score'])
+            else:
+                print("[[OK]] No concerning changes from previous version")
+        else:
+            print("[i] No previous baseline found - storing current as baseline")
+
+        # Always store current analysis as baseline for next comparison
+        self.version_diff.store_baseline(extension_id, results)
+
         # Step 9: Generate Reports
         print("\n[REPORT] STEP 9: Generating professional reports...")
         print("-" * 80)
-        
+
         # Save JSON report (detailed data)
         json_report = self.analyzer.save_report(results)
-        
+
         # Generate professional HTML report
         html_report = self.reporter.save_professional_report(results)
-        
+
         # Print Summary
         self._print_analysis_summary(results)
-        
+
         print(f"\n[FILES] Reports generated:")
         print(f"   • JSON (Technical): {json_report}")
         print(f"   • HTML (Professional): {html_report}")
-        
+
         # Print Verdict
         self._print_verdict(results)
-        
+
         return results
+    def analyze_vscode_extension(self, extension_identifier):
+        """
+        Complete analysis pipeline for VSCode extensions.
+
+        Args:
+            extension_identifier: Publisher.extensionName or marketplace URL
+
+        Returns:
+            dict: Comprehensive analysis results
+        """
+        if not VSCODE_AVAILABLE:
+            print("[!] VSCode analysis modules not available.")
+            print("    Ensure vscode_downloader.py, vscode_unpacker.py, vscode_analyzer.py are in src/")
+            return None
+
+        print("=" * 80)
+        print("[SCAN] VSCODE EXTENSION SECURITY ANALYZER")
+        print("    Four-Layer Security Assessment")
+        print("=" * 80)
+        print(f"\n[+] Target: {extension_identifier}\n")
+
+        vscode_downloader = VSCodeExtensionDownloader()
+        vscode_unpacker = VSCodeExtensionUnpacker()
+        vscode_analyzer = VSCodeStaticAnalyzer()
+
+        # Step 0: Parse identifier and fetch metadata
+        print("[MARKETPLACE] STEP 0: Fetching VS Marketplace metadata...")
+        print("-" * 80)
+
+        parsed = vscode_downloader.parse_identifier(extension_identifier)
+        if not parsed:
+            print(f"[!] Invalid extension identifier: {extension_identifier}")
+            print(f"    Expected: publisher.extensionName (e.g., ms-python.python)")
+            return None
+
+        publisher, extension_name = parsed
+        metadata = vscode_downloader.fetch_metadata(publisher, extension_name)
+
+        if metadata.get('available'):
+            print(f"[+] Extension: {metadata.get('name', 'Unknown')}")
+            print(f"    Publisher: {metadata.get('publisher', 'Unknown')} "
+                  f"{'(verified)' if metadata.get('publisher_verified') else '(unverified)'}")
+            print(f"    Installs: {metadata.get('install_count', 0):,}")
+            print(f"    Rating: {metadata.get('rating_value', 'N/A')} "
+                  f"({metadata.get('rating_count', 0)} ratings)")
+            print(f"    Version: {metadata.get('version', 'Unknown')}")
+
+            risk_signals = metadata.get('risk_signals', {})
+            if risk_signals.get('low_adoption'):
+                print(f"[i] Low adoption: <500 installs (increased risk)")
+            if risk_signals.get('unverified_publisher'):
+                print(f"[i] Publisher domain not verified")
+        else:
+            print(f"[!] Could not fetch metadata: {metadata.get('error', 'Unknown error')}")
+            print(f"    Continuing with analysis...")
+
+        # Step 1: Download VSIX
+        print(f"\n[DOWNLOAD] STEP 1: Downloading VSIX package...")
+        print("-" * 80)
+        vsix_path = vscode_downloader.download_extension(
+            publisher, extension_name,
+            version=metadata.get('version') if metadata.get('available') else None
+        )
+
+        if not vsix_path:
+            print("\n[!] Download failed.")
+            return None
+
+        # Step 2: Unpack VSIX
+        print("\n[UNPACK] STEP 2: Extracting VSIX package...")
+        print("-" * 80)
+        extension_dir = vscode_unpacker.unpack(vsix_path)
+
+        if not extension_dir:
+            print("\n[!] Extraction failed.")
+            return None
+
+        # Get file inventory
+        inventory = vscode_unpacker.get_file_inventory(extension_dir)
+        print(f"[+] Files: {inventory['total_files']} "
+              f"({inventory['total_size'] / 1024:.1f} KB)")
+        print(f"    JS: {len(inventory['javascript'])}, "
+              f"TS: {len(inventory['typescript'])}, "
+              f"JSON: {len(inventory['json'])}")
+        if inventory['has_node_modules']:
+            print(f"    node_modules: {inventory['node_modules_size'] / (1024*1024):.1f} MB")
+
+        # Step 3: Enhanced Five-Layer Static Analysis
+        print("\n[ANALYZE] STEP 3: Enhanced five-layer security analysis...")
+        print("-" * 80)
+        results = vscode_analyzer.analyze_extension(extension_dir, metadata=metadata)
+
+        if not results:
+            print("\n[!] Analysis failed.")
+            return None
+
+        # Print Layer summaries
+        meta_risk = results.get('metadata_risk', {})
+        if meta_risk.get('findings'):
+            print(f"\n[Layer 1] {len(meta_risk['findings'])} metadata finding(s)")
+            for f in meta_risk['findings'][:3]:
+                print(f"    [{f['severity'].upper()}] {f['detail']}")
+
+        supply = results.get('supply_chain', {})
+        if supply.get('findings'):
+            print(f"\n[Layer 2] {supply['dependency_count']} dependencies, "
+                  f"{len(supply['findings'])} supply chain finding(s)")
+            for f in supply['findings'][:3]:
+                if f['severity'] != 'info':
+                    print(f"    [{f['severity'].upper()}] {f['detail']}")
+
+        code = results.get('code_analysis', {})
+        findings_by_sev = code.get('findings_by_severity', {})
+        print(f"\n[Layer 3] Code analysis: {code.get('files_scanned', 0)} files scanned")
+        print(f"    Critical: {findings_by_sev.get('critical', 0)}, "
+              f"High: {findings_by_sev.get('high', 0)}, "
+              f"Medium: {findings_by_sev.get('medium', 0)}, "
+              f"Low: {findings_by_sev.get('low', 0)}")
+
+        # Print notable categories
+        findings_by_cat = code.get('findings_by_category', {})
+        notable_cats = [
+            'command_injection', 'credential_theft', 'behavioral_correlation',
+            'terminal_hijack', 'network_exfil',
+            'workspace_harvesting', 'base64_exfil', 'document_monitoring',
+            'insecure_endpoint', 'telemetry_abuse', 'hidden_iframe',
+            'analytics_injection',
+        ]
+        for cat in notable_cats:
+            if cat in findings_by_cat:
+                count = len(findings_by_cat[cat])
+                print(f"    [{cat.replace('_', ' ').upper()}] {count} finding(s)")
+
+        suppressed = code.get('suppressed_false_positives', 0)
+        if suppressed:
+            print(f"    False positives suppressed: {suppressed}")
+
+        # HTML/webview findings
+        html = results.get('html_analysis', {})
+        if html.get('findings'):
+            print(f"\n[Layer 3.5] HTML/webview: {len(html['findings'])} finding(s) in {html.get('files_scanned', 0)} file(s)")
+
+        # Package.json deep inspection
+        pkg_deep = results.get('package_json_deep', {})
+        if pkg_deep.get('findings'):
+            print(f"\n[Layer 1.5] Package.json deep: {len(pkg_deep['findings'])} finding(s)")
+
+        print(f"\n[Layer 4] Risk Score: {results['risk_score']:.1f}/10 ({results['risk_level']})")
+
+        # Step 4: Domain Intelligence on extracted URLs
+        print("\n[DOMAIN] STEP 4: Domain intelligence on extracted URLs...")
+        print("-" * 80)
+        external_urls = results.get('external_urls', [])
+        domain_intelligence = []
+
+        if external_urls:
+            seen_domains = set()
+            from urllib.parse import urlparse
+            for url_entry in external_urls:
+                try:
+                    parsed_url = urlparse(url_entry['url'])
+                    domain = parsed_url.netloc
+                    if domain and domain not in seen_domains:
+                        seen_domains.add(domain)
+                        assessment = self.domain_intel.analyze_domain(
+                            domain=domain,
+                            url=url_entry['url'],
+                            context={'file': url_entry.get('file'), 'line': url_entry.get('line')}
+                        )
+                        domain_intelligence.append(assessment)
+                except Exception:
+                    continue
+
+            threats = [d for d in domain_intelligence if d['threat_level'] in ['CRITICAL', 'HIGH']]
+            if threats:
+                print(f"[!] {len(threats)} suspicious domain(s) detected:")
+                for d in threats[:5]:
+                    print(f"    {d['domain']} - {d['classification']} ({d['threat_level']})")
+            else:
+                print(f"[+] {len(seen_domains)} domain(s) checked - no obvious threats")
+        else:
+            print("[+] No external URLs found in source code")
+
+        results['domain_intelligence'] = domain_intelligence
+
+        # Step 5: VirusTotal check on extracted domains
+        print("\n[VT] STEP 5: VirusTotal domain reputation check...")
+        print("-" * 80)
+
+        vt_results = []
+        if not getattr(self, 'skip_vt', False) and external_urls:
+            from urllib.parse import urlparse
+            unique_domains = set()
+            for url_entry in external_urls:
+                try:
+                    parsed_url = urlparse(url_entry['url'])
+                    if parsed_url.netloc:
+                        unique_domains.add(parsed_url.netloc)
+                except Exception:
+                    pass
+
+            if unique_domains:
+                vt_results = self.vt_checker.check_multiple_domains(
+                    list(unique_domains), max_checks=10
+                )
+                # Apply false positive filtering
+                filtered = self.false_positive_filter.filter_virustotal_results(vt_results)
+                vt_results = filtered['filtered_results']
+
+                malicious = [r for r in vt_results if r.get('threat_level') == 'MALICIOUS']
+                if malicious:
+                    print(f"[!] VIRUSTOTAL: {len(malicious)} MALICIOUS domain(s)!")
+                    for r in malicious:
+                        print(f"    {r['domain']}: {r['stats']['malicious']} detections")
+                else:
+                    print(f"[+] {len(unique_domains)} domain(s) checked - clean")
+            else:
+                print("[i] No external domains to check")
+        else:
+            if getattr(self, 'skip_vt', False):
+                print("[i] VirusTotal checks skipped (--skip-vt or --fast)")
+            else:
+                print("[i] No external domains to check")
+
+        results['virustotal_results'] = vt_results
+        results = vscode_analyzer.update_risk_with_virustotal(results, vt_results)
+
+        # Step 6: IOC Management
+        print("\n[DB] STEP 6: Updating local analysis database...")
+        print("-" * 80)
+        self._update_ioc_database(results, vt_results, results.get('identifier', 'unknown'))
+
+        # Step 7: Generate Reports
+        print("\n[REPORT] STEP 7: Generating professional reports...")
+        print("-" * 80)
+
+        json_report = vscode_analyzer.save_report(results)
+        html_report = self.reporter.save_professional_report(results)
+
+        # Print Summary
+        self._print_vscode_summary(results)
+
+        print(f"\n[FILES] Reports generated:")
+        print(f"   JSON (Technical): {json_report}")
+        print(f"   HTML (Professional): {html_report}")
+
+        # Print Verdict
+        self._print_verdict(results)
+
+        return results
+
+    def _print_vscode_summary(self, results):
+        """Print VSCode analysis summary"""
+        print("\n" + "=" * 80)
+        print("[RESULT] VSCODE ANALYSIS COMPLETE")
+        print("=" * 80)
+        print(f"\n[TARGET] Extension: {results.get('name', 'Unknown')}")
+        print(f"[INFO] Identifier: {results.get('identifier', 'Unknown')}")
+        print(f"[INFO] Version: {results.get('version', 'Unknown')}")
+        print(f"[!]  Risk Score: {results['risk_score']:.1f}/10 ({results['risk_level']})")
+
+        # Risk breakdown (5-component model)
+        breakdown = results.get('risk_breakdown', {})
+        if breakdown:
+            print(f"\n[BREAKDOWN] Risk Components:")
+            print(f"   Metadata & Publisher:    {breakdown.get('metadata_publisher', 0)}/2")
+            print(f"   Supply Chain:            {breakdown.get('supply_chain', 0)}/2")
+            print(f"   Code Analysis:           {breakdown.get('code_analysis', 0)}/3")
+            print(f"   Behavioral Correlations: {breakdown.get('behavioral_correlations', 0)}/2")
+            print(f"   Infrastructure:          {breakdown.get('infrastructure', 0)}/1")
+
+        # Statistics
+        code = results.get('code_analysis', {})
+        supply = results.get('supply_chain', {})
+        permissions = results.get('permissions', {})
+        vt_results = results.get('virustotal_results', [])
+        malicious_domains = [r for r in vt_results if r.get('threat_level') == 'MALICIOUS']
+
+        html = results.get('html_analysis', {})
+        correlations = [f for f in results.get('malicious_patterns', []) if f.get('category') == 'behavioral_correlation']
+
+        print(f"\n[STATS] Statistics:")
+        print(f"   Files Scanned: {code.get('files_scanned', 0)} JS/TS + {html.get('files_scanned', 0)} HTML")
+        print(f"   High-Risk APIs: {len(permissions.get('high_risk', []))}")
+        print(f"   Code Findings: {len(results.get('malicious_patterns', []))}")
+        print(f"   Behavioral Correlations: {len(correlations)}")
+        print(f"   Dependencies: {supply.get('dependency_count', 0)}")
+        print(f"   Supply Chain Issues: {len([f for f in supply.get('findings', []) if f.get('severity') in ('critical', 'high')])}")
+        print(f"   FP Suppressed: {code.get('suppressed_false_positives', 0)}")
+        print(f"   VirusTotal Malicious: {len(malicious_domains)}")
+
+        # Module usage
+        module_usage = results.get('module_usage', {})
+        if module_usage:
+            print(f"\n[MODULES] Sensitive Module Usage:")
+            for category, usages in module_usage.items():
+                modules = set(u['module'] for u in usages)
+                print(f"   {category}: {', '.join(modules)}")
+
     def _analyze_domain_intelligence(self, results):
         """Analyze all external domains with threat analysis"""
         
@@ -609,7 +1054,7 @@ class ChromeExtensionAnalyzer:
         vt_results = results.get('virustotal_results', [])
         
         print("\n" + "=" * 80)
-        print("[IOC] ANALYSIS COMPLETE")
+        print("[RESULT] ANALYSIS COMPLETE")
         print("=" * 80)
         print(f"\n[TARGET] Extension: {results['name']}")
         print(f"[INFO] Version: {results['version']}")
@@ -688,39 +1133,43 @@ class ChromeExtensionAnalyzer:
 
         print(f"\n{'=' * 80}")
 
-        if advanced_critical > 0:
-            print(f"[BLOCK] VERDICT: CONFIRMED MALWARE - ADVANCED TECHNIQUES DETECTED")
-            print(f"   +- {advanced_critical} confirmed malware technique(s) found")
-            # Show specific techniques
+        if vt_malicious and advanced_critical > 0:
+            # External confirmation (VT) + advanced techniques = high confidence
+            print(f"[BLOCK] VERDICT: CONFIRMED MALICIOUS - VENDOR-VERIFIED + ADVANCED TECHNIQUES")
+            print(f"   +- {len(vt_malicious)} domain(s) flagged by VirusTotal security vendors")
+            print(f"   +- {advanced_critical} advanced technique(s) detected (CSP manipulation, DOM injection, etc.)")
+            print(f"   +- IMMEDIATE ACTION: Block and investigate data compromise")
+        elif vt_malicious:
+            print(f"[BLOCK] VERDICT: LIKELY MALICIOUS - VIRUSTOTAL VENDOR DETECTIONS")
+            print(f"   +- {len(vt_malicious)} domain(s) flagged as malicious by security vendors")
+            print(f"   +- Recommend blocking and investigating affected systems")
+        elif advanced_critical > 0:
+            # Advanced techniques but no VT confirmation = high risk, not confirmed malware
+            print(f"[BLOCK] VERDICT: HIGH RISK - SUSPICIOUS TECHNIQUES DETECTED")
+            print(f"   +- {advanced_critical} advanced technique(s) found (per industry research)")
             if advanced.get('csp_manipulation'):
                 print(f"   +- CSP Manipulation: Removes security headers (RCE capability)")
             if advanced.get('dom_event_injection'):
                 print(f"   +- DOM Event Injection: Remote code execution bypass")
-            print(f"   +- IMMEDIATE ACTION: Block and quarantine immediately")
-            print(f"   +- This is confirmed malicious behavior per industry research")
-        elif vt_malicious:
-            print(f"[BLOCK] VERDICT: CRITICAL THREAT - VIRUSTOTAL CONFIRMED MALICIOUS")
-            print(f"   +- {len(vt_malicious)} domain(s) flagged as malicious by security vendors")
-            print(f"   +- IMMEDIATE ACTION: Block this extension immediately")
-            print(f"   +- Investigate data compromise on affected systems")
+            print(f"   +- Recommend blocking pending manual review")
         elif pii.get('overall_risk') == 'CRITICAL':
-            print(f"[BLOCK] VERDICT: CRITICAL THREAT - EXFILTRATES SENSITIVE DATA")
-            print(f"   +- Exfiltrates {pii.get('data_types_count', 0)} type(s) of critical data")
-            print(f"   +- {pii.get('recommendation', {}).get('action', 'BLOCK IMMEDIATELY')}")
-            print(f"   +- IMMEDIATE ACTION: Remove and investigate data access")
+            print(f"[BLOCK] VERDICT: HIGH RISK - SENSITIVE DATA ACCESS DETECTED")
+            print(f"   +- Accesses {pii.get('data_types_count', 0)} type(s) of sensitive data")
+            print(f"   +- {pii.get('recommendation', {}).get('action', 'Review and restrict')}")
+            print(f"   +- Investigate what data is collected and where it is sent")
         elif campaign:
-            print(f"[BLOCK] VERDICT: CRITICAL THREAT - KNOWN MALICIOUS CAMPAIGN")
+            print(f"[BLOCK] VERDICT: HIGH RISK - MATCHES KNOWN CAMPAIGN PATTERN")
             print(f"   +- Campaign: {campaign['name']}")
-            print(f"   +- IMMEDIATE ACTION: Block across all enterprise devices")
-            print(f"   +- Investigate potential data compromise")
+            print(f"   +- Recommend blocking across enterprise devices")
+            print(f"   +- Investigate potential data exposure")
         elif risk_level == 'CRITICAL':
-            print(f"[BLOCK] VERDICT: CRITICAL RISK - BLOCK IMMEDIATELY")
-            print(f"   +- This extension poses a severe security threat")
-            print(f"   +- Do NOT deploy under any circumstances")
+            print(f"[BLOCK] VERDICT: HIGH RISK / UNTRUSTED - REVIEW REQUIRED")
+            print(f"   +- Multiple high-severity heuristic findings detected")
+            print(f"   +- Not recommended for deployment without manual review")
         elif risk_level == 'HIGH':
-            print(f"[ALERT] VERDICT: HIGH RISK - BLOCK THIS EXTENSION")
+            print(f"[ALERT] VERDICT: HIGH RISK - NOT RECOMMENDED")
             print(f"   +- Significant security concerns detected")
-            print(f"   +- Not recommended for deployment")
+            print(f"   +- Manual review required before deployment")
         elif risk_level == 'MEDIUM':
             print(f"[!]  VERDICT: MEDIUM RISK - MANUAL REVIEW REQUIRED")
             print(f"   +- Security review recommended before deployment")
@@ -849,9 +1298,9 @@ class ChromeExtensionAnalyzer:
 
             self.ioc_manager.add_extension_ioc(extension_data)
 
-        # Print IOC stats
+        # Print local analysis database stats
         stats = self.ioc_manager.get_statistics()
-        print(f"[IOC] Database now contains {stats['total_domains']} domains, {stats['total_extensions']} extensions")
+        print(f"[DB] Local analysis database: {stats['total_domains']} domains, {stats['total_extensions']} extensions tracked")
 
     def _detect_firebase_usage(self, results):
         """Check if extension uses Firebase as its backend"""
@@ -957,7 +1406,7 @@ class ChromeExtensionAnalyzer:
 def parse_cli_args(argv=None):
     """Parse CLI arguments (exposed for tests). Accepts optional argv list."""
     parser = argparse.ArgumentParser(
-        description='Professional Browser Extension Security Analyzer with VirusTotal',
+        description='Professional Extension Security Analyzer - Chrome, Edge & VSCode',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -967,11 +1416,18 @@ Examples:
   # Analyze Edge extension
   python src/analyzer.py odfafepnkmbhccpbejgmiehpchacaeak --edge
 
+  # Analyze VSCode extension
+  python src/analyzer.py ms-python.python --vscode
+  python src/analyzer.py dbaeumer.vscode-eslint --vscode --fast
+
   # Analyze a suspicious extension
   python src/analyzer.py eebihieclccoidddmjcencomodomdoei
 
 Features:
   [OK] Chrome Web Store & Edge Add-ons support
+  [OK] VSCode Marketplace extension analysis (--vscode)
+  [OK] Four-layer security assessment for VSCode extensions
+  [OK] Supply chain analysis (dependency scanning)
   [OK] False positive suppression (Firebase, jQuery, CDNs)
   [OK] Threat campaign attribution via web search
   [OK] VirusTotal domain reputation checking
@@ -991,7 +1447,7 @@ Features:
 
     parser.add_argument(
         'extension_id',
-        help='Extension ID (32-character string from Chrome Web Store or Edge Add-ons URL)'
+        help='Extension ID (Chrome/Edge: 32-char ID) or VSCode identifier (publisher.name)'
     )
     
     parser.add_argument(
@@ -1043,6 +1499,12 @@ Features:
         help='Auto-detect which store the extension belongs to'
     )
 
+    parser.add_argument(
+        '--vscode',
+        action='store_true',
+        help='Analyze a VSCode extension from VS Marketplace (identifier: publisher.name)'
+    )
+
     return parser.parse_args(argv)
 
 
@@ -1052,6 +1514,37 @@ def main():
     # Use centralized parser (tests and CLI both use this)
     args = parse_cli_args()
 
+    # ── VSCode mode ──
+    if getattr(args, 'vscode', False):
+        print("""
+    ========================================================================
+       VSCODE EXTENSION SECURITY ANALYZER - PROFESSIONAL EDITION
+       Four-Layer Security Assessment with VirusTotal Integration
+    ========================================================================
+        """)
+
+        analyzer = ChromeExtensionAnalyzer()
+        fast_mode = getattr(args, 'fast', False)
+        analyzer.skip_vt = getattr(args, 'skip_vt', False) or fast_mode
+        analyzer.skip_osint = getattr(args, 'skip_osint', False) or fast_mode
+
+        results = analyzer.analyze_vscode_extension(args.extension_id)
+
+        if results:
+            risk_level = results.get('risk_level', 'MINIMAL')
+            if risk_level == 'CRITICAL':
+                sys.exit(3)
+            elif risk_level == 'HIGH':
+                sys.exit(2)
+            elif risk_level == 'MEDIUM':
+                sys.exit(1)
+            else:
+                sys.exit(0)
+        else:
+            sys.exit(4)
+        return
+
+    # ── Chrome / Edge mode ──
     # Validate extension ID format
     if len(args.extension_id) != 32:
         print(f"[!] Warning: Extension ID should be 32 characters long.")
@@ -1095,11 +1588,11 @@ def main():
     analyzer.dynamic_timeout = getattr(args, 'dynamic_timeout', 30)
 
     results = analyzer.analyze_extension(args.extension_id, browser=browser)
-    
+
     if results:
         # Exit code based on risk level
         vt_malicious = [r for r in results.get('virustotal_results', []) if r.get('threat_level') == 'MALICIOUS']
-        
+
         if vt_malicious or results.get('campaign_attribution') or results['risk_level'] == 'CRITICAL':
             sys.exit(3)  # Critical threat
         elif results['risk_level'] == 'HIGH':

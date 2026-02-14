@@ -3,6 +3,7 @@ Threat Campaign Attribution via Web Search
 Performs actual web searches for extension mentions in security research and threat reports
 """
 
+import os
 import requests
 import time
 import re
@@ -42,12 +43,25 @@ class ThreatAttribution:
             'aohghmighlieiainnegkcijnfilokake',  # Google Docs Offline
         }
 
-        # Campaign keywords to look for in search results
+        # Campaign / threat keywords to look for in search results
+        # NOTE: This is intentionally broad so we catch most threat writeups about
+        # malicious browser extensions, even when they use slightly different wording.
         self.campaign_keywords = [
+            # Known campaigns / actors
             'darkspectre', 'dark spectre', 'zoomstealer', 'zoom stealer',
             'shadypanda', 'shady panda', 'ghostposter', 'ghost poster',
-            'cacheflow', 'magnetgoblin', 'malicious extension', 'malware campaign',
-            'threat actor', 'spyware', 'data theft', 'credential stealing',
+            'cacheflow', 'magnetgoblin',
+            # Generic malicious-extension descriptors
+            'malicious extension', 'malicious chrome extension', 'chrome extension malware',
+            'browser extension malware', 'browser extension attack',
+            'spyware', 'stalkerware',
+            'data theft', 'data stealer', 'infostealer', 'info stealer',
+            'password stealer', 'credential stealer', 'credential stealing',
+            'token stealer', 'session stealer', 'cookie stealer',
+            'keylogger', 'key logging',
+            # Threat-intel style labels
+            'malware campaign', 'threat actor', 'spy plugin',
+            # Research vendors / common OSINT markers
             'layerx', 'koi security', 'browser extension attack', 'chrome malware'
         ]
 
@@ -57,7 +71,8 @@ class ThreatAttribution:
             'threatpost.com', 'malwarebytes.com', 'trendmicro.com', 'kaspersky.com',
             'sophos.com', 'avast.com', 'eset.com', 'crowdstrike.com', 'mandiant.com',
             'github.com', 'medium.com', 'reddit.com/r/netsec', 'arstechnica.com',
-            'layerxsecurity.com', 'duo.com', 'sentinelone.com', 'cybereason.com'
+            'layerxsecurity.com', 'duo.com', 'sentinelone.com', 'cybereason.com',
+            'unit42.paloaltonetworks.com'
         ]
 
     def _load_malicious_database(self):
@@ -552,6 +567,100 @@ class ThreatAttribution:
 
         return urls
 
+    def _search_unit42_repo(self, extension_id):
+        """
+        Search Palo Alto Networks Unit42 threat intel repo for extension ID.
+        Uses GitHub code search API (with token) or raw file fallback.
+
+        Returns:
+            dict: {'found': bool, 'files': [...], 'source': str}
+        """
+        result = {
+            'found': False,
+            'files': [],
+            'source': 'Unit42 (Palo Alto Networks)'
+        }
+
+        print(f"[i] Searching Unit42 threat intel repo for {extension_id}...")
+
+        # Try GitHub code search API (requires GITHUB_TOKEN or GH_TOKEN)
+        github_token = os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN')
+
+        if github_token:
+            try:
+                headers = {
+                    'Authorization': f'token {github_token}',
+                    'Accept': 'application/vnd.github.text-match+json'
+                }
+                search_url = (
+                    f'https://api.github.com/search/code'
+                    f'?q={extension_id}+repo:PaloAltoNetworks/Unit42-timely-threat-intel'
+                )
+                resp = requests.get(search_url, headers=headers, timeout=10)
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get('total_count', 0) > 0:
+                        result['found'] = True
+                        for item in data['items']:
+                            file_info = {
+                                'filename': item['name'],
+                                'url': item.get('html_url', ''),
+                                'text_matches': []
+                            }
+                            for match in item.get('text_matches', []):
+                                file_info['text_matches'].append(match.get('fragment', ''))
+                            result['files'].append(file_info)
+                        print(f"    [+] Unit42 API: Found in {len(result['files'])} file(s)")
+                        return result
+                    else:
+                        print(f"    [-] Unit42 API: Not found")
+                        return result
+            except Exception as e:
+                print(f"    [!] Unit42 API search failed: {e}, falling back to raw search")
+
+        # Fallback: Search known browser extension IOC files via raw content
+        known_extension_files = [
+            '2025-08-11-AI-summary-browser-extensions.txt',
+            '2025-08-18-IOCs-for-Chrome-extensions-leading-to-thank-you-pages-for-unwanted-content.txt',
+            '2025-08-19-IOCs-for-Chrome-extensions-leading-to-adware-or-PUP.txt',
+            '2025-09-24-IOCs-for-AI-prompt-hijacker-extensions.txt',
+            '2025-11-24-ongoing-testing-of-malicious-Chrome-extension-samples.txt',
+            '2026-02-11-IOCs-for-RAT-disguinsed-as-AI-based-browser-extension.txt',
+            '2026-02-13-IOCs-for-tactics-by-browser-extensions-to-avoid-bans.txt',
+        ]
+
+        raw_base = 'https://raw.githubusercontent.com/PaloAltoNetworks/Unit42-timely-threat-intel/main/'
+        gh_base = 'https://github.com/PaloAltoNetworks/Unit42-timely-threat-intel/blob/main/'
+
+        for filename in known_extension_files:
+            try:
+                resp = requests.get(raw_base + filename, timeout=5)
+                if resp.status_code == 200 and extension_id.lower() in resp.text.lower():
+                    result['found'] = True
+                    # Extract surrounding context lines
+                    lines = resp.text.split('\n')
+                    context_lines = []
+                    for i, line in enumerate(lines):
+                        if extension_id.lower() in line.lower():
+                            start = max(0, i - 2)
+                            end = min(len(lines), i + 3)
+                            context_lines.extend(lines[start:end])
+
+                    result['files'].append({
+                        'filename': filename,
+                        'url': gh_base + filename,
+                        'text_matches': context_lines[:10]
+                    })
+                    print(f"    [+] Unit42 raw: Found in {filename}")
+            except Exception:
+                continue
+
+        if not result['found']:
+            print(f"    [-] Unit42: Not found in known IOC files")
+
+        return result
+
     def _extract_title_from_html(self, html):
         """Extract title from HTML page"""
         try:
@@ -730,6 +839,52 @@ class ThreatAttribution:
 - Exfiltration: {campaign_data.get('ttps', {}).get('exfiltration', 'Unknown')}
 - C2: {campaign_data.get('ttps', {}).get('c2', 'Unknown')}
 '''
+                return result
+
+            # PRIORITY 1.5: Search Palo Alto Unit42 threat intel repo
+            unit42 = self._search_unit42_repo(extension_id)
+            if unit42.get('found'):
+                result['attribution_found'] = True
+                result['confidence'] = 'HIGH'
+                result['campaign_name'] = 'Unit42 Threat Intel Match'
+                result['unit42_match'] = True
+                result['source_articles'] = [
+                    {
+                        'title': f"Unit42 IOC: {f['filename']}",
+                        'url': f['url'],
+                        'source': 'Palo Alto Unit42'
+                    }
+                    for f in unit42['files']
+                ]
+
+                file_list = '\n'.join([
+                    f"- [{f['filename']}]({f['url']})" for f in unit42['files']
+                ])
+                context_text = '\n'.join([
+                    '\n'.join(f.get('text_matches', [])) for f in unit42['files']
+                ])[:500]
+
+                result['osint_summary'] = f'''
+## OSINT Analysis - UNIT42 THREAT INTEL MATCH
+
+**Extension Identified:** {extension_name} (ID: {extension_id})
+
+**Source:** Palo Alto Networks Unit42 Timely Threat Intelligence
+**Confidence Level:** HIGH (found in Unit42 IOC database)
+
+**Files Referencing This Extension:**
+{file_list}
+
+**Context:**
+```
+{context_text}
+```
+
+**Recommendation:**
+This extension ID was found in Palo Alto Networks Unit42 threat intelligence reports.
+Immediate investigation and likely removal is recommended.
+'''
+                self._cache_attribution(extension_id, result)
                 return result
 
             # PRIORITY 2: Try to identify campaign from extension name patterns

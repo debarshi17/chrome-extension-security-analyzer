@@ -852,8 +852,8 @@ class ProfessionalReportGenerator:
                     <div class="meta-value">{self._calculate_confidence(results)}%</div>
                 </div>
                 <div class="meta-item">
-                    <div class="meta-label">Manifest Version</div>
-                    <div class="meta-value">MV{results.get('manifest_version', '?')}</div>
+                    <div class="meta-label">{'Extension Type' if results.get('extension_type') == 'vscode' else 'Manifest Version'}</div>
+                    <div class="meta-value">{'VSCode Extension' if results.get('extension_type') == 'vscode' else f"MV{results.get('manifest_version', '?')}"}</div>
                 </div>
             </div>
         </div>
@@ -867,11 +867,46 @@ class ProfessionalReportGenerator:
         html += self._generate_executive_summary(results, threat_class)
         
         html += '<div class="content">'
-        
+
+        # VSCode-specific sections
+        if results.get('extension_type') == 'vscode':
+            html += self._generate_vscode_overview_section(results)
+            html += self._generate_vscode_supply_chain_section(results)
+            html += self._generate_vscode_code_analysis_section(results)
+
+        # Risk Score Breakdown (V2)
+        if results.get('risk_breakdown'):
+            html += self._generate_risk_breakdown_section(results)
+
+        # Behavioral Threat Analysis (V2)
+        bc_data = results.get('behavioral_correlations', {})
+        if isinstance(bc_data, dict) and bc_data.get('correlations'):
+            html += self._generate_behavioral_correlations_section(bc_data, results)
+
+        # Permission Attack Paths (V2)
+        attack_paths = results.get('permissions', {}).get('attack_paths', [])
+        if attack_paths:
+            html += self._generate_attack_paths_section(attack_paths)
+
+        # Attack Narrative (V3)
+        attack_narrative = results.get('attack_narrative', {})
+        if attack_narrative.get('attack_chain'):
+            html += self._generate_attack_narrative_section(attack_narrative)
+
+        # Sensitive Targets (V3)
+        sensitive_targets = results.get('sensitive_targets', {})
+        if isinstance(sensitive_targets, dict) and (sensitive_targets.get('targets') or sensitive_targets.get('gmail_module')):
+            html += self._generate_sensitive_targets_section(sensitive_targets)
+
+        # Campaign Fingerprint (V3)
+        campaign_fp = results.get('campaign_fingerprint', {})
+        if campaign_fp.get('matched_campaigns'):
+            html += self._generate_campaign_fingerprint_section(campaign_fp)
+
         # IOC Section
         html += self._generate_ioc_section(results)
 
-        # Host Permissions Analysis (NEW)
+        # Host Permissions Analysis (Chrome/Edge only)
         host_permissions = results.get('host_permissions')
         if host_permissions:
             html += self._generate_host_permissions_section(host_permissions)
@@ -894,6 +929,11 @@ class ProfessionalReportGenerator:
         pii_classification = results.get('pii_classification')
         if pii_classification:
             html += self._generate_pii_classification_section(pii_classification)
+
+        # Supply Chain Version Diff (V2)
+        version_diff = results.get('version_diff', {})
+        if version_diff.get('has_baseline') and version_diff.get('changes'):
+            html += self._generate_version_diff_section(version_diff)
 
         # Threat Attribution (NEW)
         threat_attribution = results.get('threat_attribution')
@@ -924,8 +964,8 @@ class ProfessionalReportGenerator:
         # Footer
         html += f"""
         <div class="report-footer">
-            <div class="footer-logo">Chrome Extension Security Analyzer</div>
-            <div>Professional Threat Analysis • Powered by VirusTotal & AST Analysis</div>
+            <div class="footer-logo">Extension Security Analyzer</div>
+            <div>Professional Threat Analysis • Powered by VirusTotal & Static Analysis</div>
         </div>
     </div>
 </body>
@@ -947,30 +987,39 @@ class ProfessionalReportGenerator:
     
     def _classify_threat(self, results):
         """Classify the threat type with evidence-based conservative language"""
+        # Use V2 threat classification if available
+        tc = results.get('threat_classification', {})
+        tc_class = tc.get('classification', '')
+        tc_primary = tc.get('primary_archetype', '')
+
+        if tc_class == 'MALICIOUS_INDICATORS':
+            primary_display = tc_primary.replace('_', ' ').title() if tc_primary != 'UNKNOWN' else 'Multiple Threats'
+            return f'Malicious Indicators ({primary_display})'
+        elif tc_class == 'HIGH_RISK_SUSPICIOUS':
+            primary_display = tc_primary.replace('_', ' ').title() if tc_primary != 'UNKNOWN' else 'Suspicious'
+            return f'High Risk ({primary_display})'
+        elif tc_class == 'ELEVATED_RISK':
+            return 'Elevated Risk - Investigation Needed'
+
+        # Fall back to legacy classification
         campaign = results.get('campaign_attribution')
         settings = results.get('settings_overrides', {})
         vt_results = results.get('virustotal_results', [])
         vt_malicious = [r for r in vt_results if r.get('threat_level') == 'MALICIOUS']
 
-        # Count total VT detections across all malicious domains
         total_detections = sum(r.get('stats', {}).get('malicious', 0) for r in vt_malicious)
 
-        # Conservative classification - require strong evidence for "malicious" label
         if vt_malicious and total_detections >= 10:
-            # Multiple vendors across multiple domains = high confidence
             return 'Likely Malicious'
         elif vt_malicious and total_detections >= 5:
-            # Several vendors detected issues
             return 'Suspicious Activity Detected'
         elif vt_malicious:
-            # Low detection count - could be false positives
             return 'Potentially Suspicious'
         elif campaign:
-            return campaign.get('name', 'Possible Malware Campaign')
+            return campaign.get('name', 'Matches Known Campaign Pattern')
         elif settings.get('search_hijacking'):
             return 'Possible Browser Hijacker'
         elif len(results.get('malicious_patterns', [])) > 15:
-            # Require more patterns for high-confidence classification
             return 'Suspicious Behavior Detected'
         else:
             return 'Analysis Complete - Review Findings'
@@ -986,20 +1035,31 @@ class ProfessionalReportGenerator:
         if vt_malicious:
             total_detections = sum(r.get('stats', {}).get('malicious', 0) for r in vt_malicious)
             if total_detections >= 10:
-                confidence += 20  # High confidence with multiple vendors
+                confidence += 20
             elif total_detections >= 5:
-                confidence += 12  # Moderate confidence
+                confidence += 12
             else:
-                confidence += 5   # Low confidence - could be false positives
+                confidence += 5
 
         if results.get('campaign_attribution'):
-            confidence += 15  # Attribution increases confidence but not certainty
+            confidence += 15
 
         if results.get('settings_overrides', {}).get('has_overrides'):
             confidence += 8
 
-        # Cap at 85% - never claim 95%+ confidence without manual verification
-        return min(confidence, 85)
+        # V2: Behavioral correlations increase confidence
+        bc = results.get('behavioral_correlations', {})
+        bc_summary = bc.get('summary', {}) if isinstance(bc, dict) else {}
+        if bc_summary.get('critical', 0) >= 2:
+            confidence += 15  # Multiple critical chains = strong signal
+        elif bc_summary.get('critical', 0) >= 1:
+            confidence += 10
+        elif bc_summary.get('high', 0) >= 2:
+            confidence += 5
+
+        # Cap at 90% with behavioral evidence, 85% without
+        max_conf = 90 if bc_summary.get('critical', 0) > 0 else 85
+        return min(confidence, max_conf)
     
     def _generate_campaign_alert(self, campaign):
         """Generate campaign alert section"""
@@ -1036,11 +1096,28 @@ class ProfessionalReportGenerator:
         campaign = results.get('campaign_attribution')
         settings = results.get('settings_overrides', {})
         vt_malicious = [r for r in results.get('virustotal_results', []) if r.get('threat_level') == 'MALICIOUS']
+        attribution = results.get('threat_attribution') or {}
+        attr_conf = attribution.get('confidence', 'NONE')
+        attr_found = attribution.get('attribution_found', False)
+        has_ti_sources = bool(attribution.get('source_articles'))
         
         summary_class = 'critical' if risk_level in ['CRITICAL', 'HIGH'] or vt_malicious else ''
         
-        # BLUF (Bottom Line Up Front) - Conservative language
-        if vt_malicious:
+        # Use V2 threat classification if available
+        tc = results.get('threat_classification', {})
+        tc_class = tc.get('classification', '')
+        tc_summary = tc.get('summary', '')
+        tc_primary = tc.get('primary_archetype', '')
+
+        # BLUF (Bottom Line Up Front) - Use V2 classification and OSINT when available
+        if attr_found and attr_conf == 'CONFIRMED':
+            # External threat intelligence has already confirmed this extension as malicious
+            bluf = "External threat intelligence has confirmed this extension as malicious. Immediate removal and incident response are strongly recommended."
+        elif tc_class == 'MALICIOUS_INDICATORS':
+            bluf = f"MALICIOUS INDICATORS: {tc_summary} Immediate removal recommended."
+        elif tc_class == 'HIGH_RISK_SUSPICIOUS':
+            bluf = f"HIGH RISK: {tc_summary} Manual security review and monitoring recommended."
+        elif vt_malicious:
             total_detections = sum(r.get('stats', {}).get('malicious', 0) for r in vt_malicious)
             if total_detections >= 10:
                 bluf = f"{len(vt_malicious)} domain(s) flagged by multiple security vendors ({total_detections} total detections). Suspicious activity detected. Further investigation recommended."
@@ -1050,12 +1127,17 @@ class ProfessionalReportGenerator:
                 bluf = f"{len(vt_malicious)} domain(s) flagged by limited security vendors ({total_detections} total detections). May indicate suspicious activity or false positives. Manual verification recommended."
         elif campaign:
             bluf = f"Extension behavior patterns similar to {campaign['name']} campaign. Further analysis recommended to confirm attribution."
+        elif tc_class == 'ELEVATED_RISK':
+            bluf = f"ELEVATED RISK: {tc_summary}"
         elif settings.get('search_hijacking'):
             bluf = "Extension modifies browser search settings. Could indicate affiliate revenue generation or user tracking. Review privacy implications."
         elif risk_level == 'CRITICAL':
             bluf = "Multiple suspicious behaviors detected. Extension exhibits characteristics associated with potentially unwanted programs. Manual security review recommended."
         elif risk_level == 'HIGH':
-            bluf = "Suspicious behaviors detected. Manual security review recommended before deployment or continued use."
+            if attr_found and attr_conf in ('CONFIRMED', 'HIGH', 'MEDIUM'):
+                bluf = "This extension is flagged by external security research as potentially malicious. Treat as hostile until proven otherwise and restrict usage."
+            else:
+                bluf = "Suspicious behaviors detected. Manual security review recommended before deployment or continued use."
         else:
             bluf = "Analysis completed. Review findings below for security assessment. No immediately critical issues identified."
         
@@ -1068,7 +1150,15 @@ class ProfessionalReportGenerator:
         
         # Key findings
         findings = []
-        
+
+        # Threat intelligence / OSINT findings
+        if attr_found:
+            if attr_conf == 'CONFIRMED':
+                findings.append(('🧠', "Confirmed malicious in external threat intelligence sources (see Threat Intelligence section)."))
+            elif has_ti_sources or attr_conf in ('HIGH', 'MEDIUM', 'LOW'):
+                campaign_name = attribution.get('campaign_name') or "external security research"
+                findings.append(('🧠', f"Identified as suspicious/malicious in {campaign_name} based on OSINT threat intelligence."))
+
         if vt_malicious:
             findings.append(('🛡️', f"VirusTotal: {len(vt_malicious)} malicious domain(s) detected"))
         
@@ -1082,10 +1172,28 @@ class ProfessionalReportGenerator:
             else:
                 findings.append(('🔍', "Search engine hijacking detected"))
         
+        # Behavioral correlations (V2)
+        bc = results.get('behavioral_correlations', {})
+        bc_correlations = bc.get('correlations', []) if isinstance(bc, dict) else []
+        bc_crit = [c for c in bc_correlations if c.get('severity') == 'critical']
+        bc_high = [c for c in bc_correlations if c.get('severity') == 'high']
+        if bc_crit:
+            findings.append(('🔗', f"{len(bc_crit)} critical attack chain(s) detected: " +
+                           ', '.join(c['name'] for c in bc_crit[:3])))
+        elif bc_high:
+            findings.append(('🔗', f"{len(bc_high)} high-risk behavioral pattern(s) detected"))
+
+        # Attack paths (V2)
+        attack_paths = results.get('permissions', {}).get('attack_paths', [])
+        crit_paths = [ap for ap in attack_paths if ap.get('severity') == 'CRITICAL']
+        if crit_paths:
+            findings.append(('⚡', f"{len(crit_paths)} critical attack path(s): " +
+                           ', '.join(ap['name'] for ap in crit_paths[:3])))
+
         permissions = results.get('permissions', {})
         if permissions.get('high_risk'):
             findings.append(('🚩', f"{len(permissions['high_risk'])} dangerous permissions requested"))
-        
+
         patterns = results.get('malicious_patterns', [])
         high_patterns = [p for p in patterns if p['severity'] == 'high']
         if high_patterns:
@@ -1113,6 +1221,649 @@ class ProfessionalReportGenerator:
 """
         return html
     
+    def _generate_risk_breakdown_section(self, results):
+        """Generate V2 risk score breakdown with component bars"""
+        breakdown = results.get('risk_breakdown', {})
+        risk_score = results.get('risk_score', 0)
+        risk_level = results.get('risk_level', 'UNKNOWN')
+        tc = results.get('threat_classification', {})
+
+        components = [
+            ('Permissions', breakdown.get('permissions', 0), 2.5, '#f97316'),
+            ('Code Analysis', breakdown.get('code_analysis', 0), 2.5, '#eab308'),
+            ('Behavioral Correlations', breakdown.get('behavioral_correlations', 0), 3.0, '#ef4444'),
+            ('Infrastructure', breakdown.get('infrastructure', 0), 2.0, '#8b5cf6'),
+        ]
+
+        positive = breakdown.get('positive_signals', 0)
+
+        # Classification badge
+        classification = tc.get('classification', '')
+        primary = tc.get('primary_archetype', '')
+        class_color = {
+            'MALICIOUS_INDICATORS': '#ef4444',
+            'HIGH_RISK_SUSPICIOUS': '#f97316',
+            'ELEVATED_RISK': '#eab308',
+            'SUSPICIOUS_HIGH_RISK': '#f97316',
+            'MODERATE_RISK': '#eab308',
+            'LOW_RISK': '#22c55e',
+        }.get(classification, '#64748b')
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📊</div>
+                <div class="section-title">Risk Score Breakdown</div>
+            </div>
+
+            <div style="display: flex; gap: 30px; align-items: flex-start; flex-wrap: wrap;">
+                <div style="flex: 0 0 200px; text-align: center;">
+                    <div style="font-size: 56px; font-weight: 800; color: {self._get_risk_color(risk_level)};">{risk_score:.1f}</div>
+                    <div style="font-size: 14px; color: var(--text-secondary); margin-top: 4px;">out of 10.0</div>
+                    <div style="margin-top: 12px; padding: 6px 16px; border-radius: 20px; display: inline-block;
+                                background: {self._get_risk_color(risk_level)}; color: white;
+                                font-weight: 700; font-size: 13px; letter-spacing: 1px;">
+                        {risk_level} RISK
+                    </div>
+"""
+        if classification and classification not in ('LOW_RISK', 'MODERATE_RISK'):
+            html += f"""
+                    <div style="margin-top: 10px; padding: 6px 12px; border-radius: 16px; display: inline-block;
+                                border: 1px solid {class_color}; color: {class_color};
+                                font-size: 11px; font-weight: 600; letter-spacing: 0.5px;">
+                        {classification.replace('_', ' ')}
+                    </div>
+"""
+        if primary and primary != 'UNKNOWN':
+            html += f"""
+                    <div style="margin-top: 6px; font-size: 12px; color: var(--text-secondary);">
+                        Primary: {primary.replace('_', ' ')}
+                    </div>
+"""
+        html += """
+                </div>
+                <div style="flex: 1; min-width: 300px;">
+"""
+        for name, value, max_val, color in components:
+            pct = (value / max_val * 100) if max_val > 0 else 0
+            html += f"""
+                    <div style="margin-bottom: 16px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                            <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">{name}</span>
+                            <span style="font-size: 13px; color: var(--text-secondary);">{value:.1f} / {max_val:.1f}</span>
+                        </div>
+                        <div style="height: 10px; background: rgba(255,255,255,0.08); border-radius: 5px; overflow: hidden;">
+                            <div style="height: 100%; width: {pct:.0f}%; background: {color}; border-radius: 5px;
+                                        transition: width 0.3s;"></div>
+                        </div>
+                    </div>
+"""
+
+        if positive < 0:
+            html += f"""
+                    <div style="margin-top: 8px; padding: 8px 14px; background: rgba(34, 197, 94, 0.1);
+                                border: 1px solid rgba(34, 197, 94, 0.3); border-radius: 6px;
+                                font-size: 12px; color: #86efac;">
+                        Positive signals: {positive:.1f} (verified publisher, user count, narrow scope)
+                    </div>
+"""
+        html += """
+                </div>
+            </div>
+        </div>
+"""
+        return html
+
+    def _generate_behavioral_correlations_section(self, bc_data, results):
+        """Generate behavioral threat analysis section showing attack chains"""
+        correlations = bc_data.get('correlations', [])
+        summary = bc_data.get('summary', {})
+
+        severity_colors = {
+            'critical': '#ef4444',
+            'high': '#f97316',
+            'medium': '#eab308',
+            'low': '#22c55e',
+        }
+        severity_icons = {
+            'critical': '🔴',
+            'high': '🟠',
+            'medium': '🟡',
+            'low': '🟢',
+        }
+        attack_type_icons = {
+            'session_hijacking': '🍪',
+            'credential_theft': '🔑',
+            'surveillance': '👁️',
+            'data_exfiltration': '📤',
+            'remote_code_exec': '💉',
+            'wallet_hijack': '💰',
+            'search_hijack': '🔍',
+            'fingerprinting': '🖐️',
+            'tracking': '📡',
+            'extension_manipulation': '🧩',
+            'staged_payload': '📦',
+            'phishing_overlay': '🎣',
+            'traffic_mitm': '🔀',
+            'c2_channel': '📡',
+            'evasive_malware': '🥷',
+            'system_escape': '🖥️',
+            'oauth_theft': '🔐',
+        }
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔗</div>
+                <div class="section-title">Behavioral Threat Analysis</div>
+            </div>
+
+            <div style="margin-bottom: 20px; padding: 16px; background: rgba(239, 68, 68, 0.08);
+                        border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 8px;">
+                <div style="font-size: 14px; color: var(--text-primary); margin-bottom: 8px;">
+                    <strong>{summary.get('total_correlations', len(correlations))} compound threat pattern(s)</strong> detected by correlating findings across permissions, code patterns, and infrastructure.
+                </div>
+                <div style="display: flex; gap: 16px; font-size: 12px; color: var(--text-secondary);">
+                    <span>🔴 Critical: <strong style="color: #ef4444;">{summary.get('critical', 0)}</strong></span>
+                    <span>🟠 High: <strong style="color: #f97316;">{summary.get('high', 0)}</strong></span>
+                    <span>🟡 Medium: <strong style="color: #eab308;">{summary.get('medium', 0)}</strong></span>
+                </div>
+            </div>
+
+            <div style="display: grid; gap: 16px;">
+"""
+
+        # Sort: critical first, then high, then medium
+        sorted_corr = sorted(correlations,
+                             key=lambda c: {'critical': 0, 'high': 1, 'medium': 2}.get(
+                                 c.get('severity', ''), 3))
+
+        for corr in sorted_corr:
+            sev = corr.get('severity', 'medium')
+            color = severity_colors.get(sev, '#64748b')
+            icon = severity_icons.get(sev, '⚪')
+            attack_icon = attack_type_icons.get(corr.get('attack_type', ''), '🔗')
+            name = html_module.escape(corr.get('name', 'Unknown'))
+            desc = html_module.escape(corr.get('description', ''))
+            evidence = html_module.escape(corr.get('evidence', ''))
+            confidence = corr.get('confidence', 'medium')
+            attack_type = corr.get('attack_type', '').replace('_', ' ').title()
+
+            html += f"""
+                <div style="background: var(--bg-card); border: 1px solid var(--border-color);
+                            border-left: 4px solid {color}; border-radius: 8px; padding: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span style="font-size: 20px;">{attack_icon}</span>
+                            <div>
+                                <div style="font-size: 16px; font-weight: 700; color: var(--text-primary);">{name}</div>
+                                <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">{attack_type}</div>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span style="padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700;
+                                        background: {color}; color: white; text-transform: uppercase;">{sev}</span>
+                            <span style="padding: 3px 10px; border-radius: 12px; font-size: 11px;
+                                        border: 1px solid var(--border-color); color: var(--text-secondary);">
+                                {confidence} confidence
+                            </span>
+                        </div>
+                    </div>
+                    <div style="font-size: 14px; color: var(--text-primary); margin-bottom: 12px; line-height: 1.6;">{desc}</div>
+                    <div style="padding: 10px 14px; background: rgba(0,0,0,0.2); border-radius: 6px;
+                                font-size: 12px; font-family: 'Monaco', 'Courier New', monospace; color: #94a3b8;">
+                        <strong style="color: var(--text-primary);">Evidence:</strong> {evidence}
+                    </div>
+"""
+            # Show components if available
+            components = corr.get('components', [])
+            if components:
+                html += """
+                    <div style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px;">
+"""
+                for comp in components:
+                    comp_escaped = html_module.escape(str(comp))
+                    html += f"""
+                        <span style="padding: 2px 8px; border-radius: 10px; font-size: 11px;
+                                    background: rgba(255,255,255,0.06); border: 1px solid var(--border-color);
+                                    color: var(--text-secondary);">{comp_escaped}</span>
+"""
+                html += "                    </div>"
+
+            html += """
+                </div>
+"""
+
+        html += """
+            </div>
+        </div>
+"""
+        return html
+
+    def _generate_attack_paths_section(self, attack_paths):
+        """Generate permission attack paths section"""
+        severity_colors = {
+            'CRITICAL': '#ef4444',
+            'HIGH': '#f97316',
+            'MEDIUM': '#eab308',
+        }
+
+        crit_count = sum(1 for ap in attack_paths if ap.get('severity') == 'CRITICAL')
+        high_count = sum(1 for ap in attack_paths if ap.get('severity') == 'HIGH')
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">⚡</div>
+                <div class="section-title">Permission Attack Paths</div>
+            </div>
+
+            <div style="margin-bottom: 20px; font-size: 14px; color: var(--text-secondary); line-height: 1.6;">
+                Permission combinations that enable specific attack capabilities.
+                {crit_count} critical and {high_count} high-severity path(s) detected.
+            </div>
+
+            <div style="display: grid; gap: 12px;">
+"""
+
+        for ap in sorted(attack_paths,
+                         key=lambda x: {'CRITICAL': 0, 'HIGH': 1, 'MEDIUM': 2}.get(
+                             x.get('severity', ''), 3)):
+            sev = ap.get('severity', 'MEDIUM')
+            color = severity_colors.get(sev, '#64748b')
+            name = html_module.escape(ap.get('name', ''))
+            desc = html_module.escape(ap.get('description', ''))
+            perms = ap.get('permissions', [])
+            score = ap.get('score', 0)
+
+            perm_badges = ' '.join(
+                f'<span style="padding: 2px 8px; border-radius: 10px; font-size: 11px; '
+                f'background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.3); '
+                f'color: #fca5a5;">{html_module.escape(p)}</span>'
+                for p in perms
+            )
+
+            html += f"""
+                <div style="background: var(--bg-card); border: 1px solid var(--border-color);
+                            border-left: 4px solid {color}; border-radius: 8px; padding: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="font-size: 15px; font-weight: 700; color: var(--text-primary);">{name}</div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span style="font-size: 12px; color: var(--text-secondary);">+{score:.1f}</span>
+                            <span style="padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700;
+                                        background: {color}; color: white;">{sev}</span>
+                        </div>
+                    </div>
+                    <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 10px;">{desc}</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                        {perm_badges}
+                    </div>
+                </div>
+"""
+
+        html += """
+            </div>
+        </div>
+"""
+        return html
+
+    def _generate_version_diff_section(self, version_diff):
+        """Generate supply chain version diff section"""
+        changes = version_diff.get('changes', [])
+        sc_level = version_diff.get('supply_chain_level', 'LOW')
+        sc_risk = version_diff.get('supply_chain_risk', 0)
+        risk_delta = version_diff.get('risk_delta', 0)
+        old_v = version_diff.get('old_version', '?')
+        new_v = version_diff.get('new_version', '?')
+        baseline_date = version_diff.get('baseline_date', '?')
+
+        level_colors = {
+            'CRITICAL': '#ef4444',
+            'HIGH': '#f97316',
+            'MEDIUM': '#eab308',
+            'LOW': '#22c55e',
+        }
+        sc_color = level_colors.get(sc_level, '#64748b')
+
+        severity_colors = {
+            'critical': '#ef4444',
+            'high': '#f97316',
+            'medium': '#eab308',
+            'low': '#22c55e',
+        }
+
+        delta_str = f"+{risk_delta:.1f}" if risk_delta > 0 else f"{risk_delta:.1f}"
+        delta_color = '#ef4444' if risk_delta > 0 else '#22c55e' if risk_delta < 0 else '#64748b'
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔄</div>
+                <div class="section-title">Supply Chain Version Analysis</div>
+            </div>
+
+            <div style="display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap;">
+                <div style="padding: 16px; background: var(--bg-card); border-radius: 8px; flex: 1; min-width: 150px; text-align: center;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Version Change</div>
+                    <div style="font-size: 16px; font-weight: 700; color: var(--text-primary);">v{html_module.escape(str(old_v))} → v{html_module.escape(str(new_v))}</div>
+                </div>
+                <div style="padding: 16px; background: var(--bg-card); border-radius: 8px; flex: 1; min-width: 150px; text-align: center;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Supply Chain Risk</div>
+                    <div style="font-size: 16px; font-weight: 700; color: {sc_color};">{sc_level} ({sc_risk:.1f}/5)</div>
+                </div>
+                <div style="padding: 16px; background: var(--bg-card); border-radius: 8px; flex: 1; min-width: 150px; text-align: center;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Risk Delta</div>
+                    <div style="font-size: 16px; font-weight: 700; color: {delta_color};">{delta_str}</div>
+                </div>
+                <div style="padding: 16px; background: var(--bg-card); border-radius: 8px; flex: 1; min-width: 150px; text-align: center;">
+                    <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 4px;">Baseline Date</div>
+                    <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">{html_module.escape(str(baseline_date)[:10])}</div>
+                </div>
+            </div>
+
+            <div style="display: grid; gap: 10px;">
+"""
+        for change in changes:
+            sev = change.get('severity', 'medium')
+            color = severity_colors.get(sev, '#64748b')
+            desc = html_module.escape(change.get('description', ''))
+            change_type = change.get('type', '').replace('_', ' ').title()
+
+            html += f"""
+                <div style="padding: 12px 16px; background: var(--bg-card); border-left: 4px solid {color};
+                            border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-size: 14px; font-weight: 600; color: var(--text-primary);">{desc}</div>
+                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">{change_type}</div>
+                    </div>
+                    <span style="padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700;
+                                background: {color}; color: white; text-transform: uppercase; flex-shrink: 0;">{sev}</span>
+                </div>
+"""
+
+        html += """
+            </div>
+        </div>
+"""
+        return html
+
+    # ------------------------------------------------------------------
+    # V3 report sections
+    # ------------------------------------------------------------------
+
+    def _generate_attack_narrative_section(self, narrative):
+        """Generate attack narrative chain visualization (V3)"""
+        chain = narrative.get('attack_chain', [])
+        confidence = narrative.get('confidence', 'low')
+        impact = narrative.get('impact_summary', '')
+
+        conf_colors = {'high': '#ef4444', 'medium': '#f97316', 'low': '#eab308'}
+        stage_icons = {'ACCESS': '🔓', 'COLLECT': '📥', 'EXFILTRATE': '📤', 'PERSIST': '🔁'}
+        risk_colors = {'critical': '#ef4444', 'high': '#f97316', 'medium': '#eab308', 'low': '#22c55e'}
+        conf_color = conf_colors.get(confidence, '#64748b')
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">⛓️</div>
+                <div class="section-title">Attack Narrative</div>
+                <span style="margin-left: auto; padding: 4px 12px; border-radius: 12px; font-size: 11px;
+                            font-weight: 700; background: {conf_color}; color: white; text-transform: uppercase;">
+                    {html_module.escape(confidence)} confidence
+                </span>
+            </div>
+"""
+        if impact:
+            html += f"""
+            <div style="padding: 14px 18px; margin-bottom: 20px; background: rgba(239, 68, 68, 0.08);
+                        border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px;
+                        font-size: 13px; color: #fca5a5; line-height: 1.6;">
+                {html_module.escape(impact)}
+            </div>
+"""
+
+        # Chain visualization
+        html += '            <div style="display: flex; align-items: stretch; gap: 0; flex-wrap: wrap;">\n'
+        for i, stage in enumerate(chain):
+            stage_name = html_module.escape(stage.get('stage', ''))
+            capability = html_module.escape(stage.get('capability', ''))
+            risk = stage.get('risk', 'medium')
+            r_color = risk_colors.get(risk, '#64748b')
+            icon = stage_icons.get(stage_name, '🔗')
+
+            # Arrow between stages
+            if i > 0:
+                html += """
+                <div style="display: flex; align-items: center; padding: 0 4px; color: var(--text-secondary); font-size: 22px;">→</div>
+"""
+            destinations = stage.get('destinations', [])
+            dest_html = ''
+            if destinations:
+                dest_list = ', '.join(html_module.escape(d) for d in destinations[:5])
+                dest_html = f'<div style="font-size: 11px; color: #fca5a5; margin-top: 4px;">→ {dest_list}</div>'
+
+            html += f"""
+                <div style="flex: 1; min-width: 180px; padding: 16px; background: var(--bg-card);
+                            border-top: 3px solid {r_color}; border-radius: 8px;">
+                    <div style="font-size: 20px; margin-bottom: 6px;">{icon}</div>
+                    <div style="font-size: 12px; font-weight: 700; color: {r_color}; letter-spacing: 1px; margin-bottom: 6px;">
+                        {stage_name}
+                    </div>
+                    <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5;">{capability}</div>
+                    {dest_html}
+                </div>
+"""
+        html += '            </div>\n'
+
+        html += """
+        </div>
+"""
+        return html
+
+    def _generate_sensitive_targets_section(self, sensitive_data):
+        """Generate sensitive target detection section (V3)"""
+        targets = sensitive_data.get('targets', [])
+        gmail_modules = sensitive_data.get('gmail_module', [])
+        multiplier = sensitive_data.get('risk_multiplier', 1.0)
+        categories = sensitive_data.get('categories', [])
+
+        category_icons = {
+            'email': '📧', 'productivity': '💼',
+            'finance': '💰', 'auth': '🔐',
+        }
+        severity_colors = {
+            'critical': '#ef4444', 'high': '#f97316',
+            'medium': '#eab308', 'low': '#22c55e',
+        }
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🎯</div>
+                <div class="section-title">Sensitive Target Detection</div>
+                <span style="margin-left: auto; padding: 4px 12px; border-radius: 12px; font-size: 11px;
+                            font-weight: 700; background: #ef4444; color: white;">
+                    {len(targets)} target{'s' if len(targets) != 1 else ''} &middot; {multiplier:.1f}x multiplier
+                </span>
+            </div>
+"""
+        # Category summary chips
+        if categories:
+            html += '            <div style="display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;">\n'
+            for cat in categories:
+                icon = category_icons.get(cat, '⚠️')
+                html += f"""
+                <span style="padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;
+                            background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.3); color: #fca5a5;">
+                    {icon} {html_module.escape(cat.upper())}
+                </span>
+"""
+            html += '            </div>\n'
+
+        # Target list
+        if targets:
+            html += '            <div style="display: grid; gap: 8px; margin-bottom: 16px;">\n'
+            for t in targets:
+                sev = t.get('severity', 'medium')
+                s_color = severity_colors.get(sev, '#64748b')
+                domain = html_module.escape(t.get('domain', ''))
+                desc = html_module.escape(t.get('description', ''))
+                source = html_module.escape(t.get('source', ''))
+                run_at = t.get('run_at', '')
+
+                run_at_badge = ''
+                if run_at == 'document_start':
+                    run_at_badge = ('<span style="margin-left: 8px; padding: 2px 8px; border-radius: 10px; '
+                                    'font-size: 10px; font-weight: 700; background: #ef4444; color: white;">'
+                                    'DOCUMENT_START</span>')
+
+                html += f"""
+                <div style="padding: 10px 14px; background: var(--bg-card); border-left: 3px solid {s_color};
+                            border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <span style="font-size: 13px; font-weight: 600; color: var(--text-primary);">{domain}</span>
+                        {run_at_badge}
+                        <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">{desc} &middot; via {source}</div>
+                    </div>
+                    <span style="padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700;
+                                background: {s_color}; color: white; text-transform: uppercase; flex-shrink: 0;">{sev}</span>
+                </div>
+"""
+            html += '            </div>\n'
+
+        # Gmail surveillance modules
+        if gmail_modules:
+            html += f"""
+            <div style="padding: 16px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3);
+                        border-radius: 8px;">
+                <div style="font-size: 14px; font-weight: 700; color: #ef4444; margin-bottom: 10px;">
+                    📧 Gmail Surveillance Module Detected
+                </div>
+"""
+            for gm in gmail_modules:
+                file_name = html_module.escape(gm.get('file', ''))
+                indicators = gm.get('indicators', [])
+                count = gm.get('indicator_count', 0)
+                html += f"""
+                <div style="margin-bottom: 10px;">
+                    <div style="font-size: 13px; font-weight: 600; color: var(--text-primary);">
+                        {file_name} &mdash; {count} surveillance indicators
+                    </div>
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;">
+"""
+                for ind in indicators:
+                    html += f"""
+                        <span style="padding: 3px 10px; border-radius: 12px; font-size: 11px;
+                                    background: rgba(239, 68, 68, 0.15); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.25);">
+                            {html_module.escape(ind)}
+                        </span>
+"""
+                html += """
+                    </div>
+                </div>
+"""
+            html += '            </div>\n'
+
+        html += """
+        </div>
+"""
+        return html
+
+    def _generate_campaign_fingerprint_section(self, campaign_fp):
+        """Generate campaign fingerprint / known campaign match section (V3)"""
+        matched = campaign_fp.get('matched_campaigns', [])
+        domains = campaign_fp.get('domains', [])
+        code_hashes = campaign_fp.get('code_hashes', [])
+        infra_fp = campaign_fp.get('infra_fingerprint', '')
+        cap_fp = campaign_fp.get('capability_fingerprint', '')
+
+        html = """
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🧬</div>
+                <div class="section-title">Campaign Fingerprint</div>
+            </div>
+"""
+        # Matched campaigns
+        for match in matched:
+            name = html_module.escape(match.get('name', ''))
+            conf = match.get('confidence', 0)
+            desc = html_module.escape(match.get('description', ''))
+            ref = match.get('reference', '')
+
+            conf_pct = int(conf * 100)
+            conf_color = '#ef4444' if conf >= 0.8 else '#f97316' if conf >= 0.6 else '#eab308'
+
+            ref_html = ''
+            if ref:
+                ref_html = f'<a href="{html_module.escape(ref)}" style="color: #93c5fd; font-size: 12px; text-decoration: none;" target="_blank">Reference →</a>'
+
+            html += f"""
+            <div style="padding: 18px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3);
+                        border-radius: 8px; margin-bottom: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                    <div style="font-size: 16px; font-weight: 700; color: #fca5a5;">⚠️ {name}</div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 24px; font-weight: 800; color: {conf_color};">{conf_pct}%</div>
+                        <div style="font-size: 11px; color: var(--text-secondary);">match confidence</div>
+                    </div>
+                </div>
+                <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 8px;">{desc}</div>
+                {ref_html}
+            </div>
+"""
+
+        # Fingerprint details
+        html += """
+            <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px;">
+"""
+        if infra_fp:
+            html += f"""
+                <div style="padding: 12px 16px; background: var(--bg-card); border-radius: 8px; flex: 1; min-width: 200px;">
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">Infrastructure Fingerprint</div>
+                    <div style="font-family: monospace; font-size: 13px; color: #93c5fd;">{html_module.escape(infra_fp)}</div>
+                </div>
+"""
+        if cap_fp:
+            html += f"""
+                <div style="padding: 12px 16px; background: var(--bg-card); border-radius: 8px; flex: 1; min-width: 200px;">
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">Capability Fingerprint</div>
+                    <div style="font-family: monospace; font-size: 13px; color: #c4b5fd;">{html_module.escape(cap_fp)}</div>
+                </div>
+"""
+        if code_hashes:
+            html += f"""
+                <div style="padding: 12px 16px; background: var(--bg-card); border-radius: 8px; flex: 1; min-width: 200px;">
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">Code Hashes</div>
+                    <div style="font-size: 13px; color: var(--text-primary);">{len(code_hashes)} file(s) fingerprinted</div>
+                </div>
+"""
+        html += '            </div>\n'
+
+        # Domains
+        if domains:
+            html += """
+            <div style="margin-top: 14px;">
+                <div style="font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 8px;">External Domains in Fingerprint</div>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+"""
+            for d in domains[:20]:
+                html += f"""
+                    <span style="padding: 4px 10px; border-radius: 12px; font-size: 11px; font-family: monospace;
+                                background: rgba(147, 197, 253, 0.1); border: 1px solid rgba(147, 197, 253, 0.25); color: #93c5fd;">
+                        {html_module.escape(d)}
+                    </span>
+"""
+            html += """
+                </div>
+            </div>
+"""
+
+        html += """
+        </div>
+"""
+        return html
+
     def _generate_ioc_section(self, results):
         """Generate Indicators of Compromise section"""
         
@@ -1130,7 +1881,7 @@ class ProfessionalReportGenerator:
             <div class="ioc-category">
                 <div class="ioc-category-title">📌 Extension Identifier</div>
                 <div class="ioc-list">
-                    <div class="ioc-item">{results['extension_id']}</div>
+                    <div class="ioc-item">{results.get('extension_id', results.get('identifier', 'unknown'))}</div>
                 </div>
             </div>
 """
@@ -1408,7 +2159,7 @@ class ProfessionalReportGenerator:
             html += """
             <h3 style="color: #fbbf24; margin-bottom: 15px; font-size: 18px; font-weight: 700;">Beaconing Detection</h3>
             <p style="color: #94a3b8; font-size: 13px; margin-bottom: 12px;">
-                Endpoints hit repeatedly by the extension. Regular intervals suggest C2 heartbeating or telemetry exfil.
+                Endpoints hit repeatedly by the extension. Regular intervals suggest periodic communication or telemetry collection.
             </p>
 """
             for b in beaconing:
@@ -1607,7 +2358,18 @@ class ProfessionalReportGenerator:
     
     def _generate_technical_details(self, results):
         """Generate technical details section"""
-        
+
+        is_vscode = results.get('extension_type') == 'vscode'
+        ext_id = results.get('identifier', results.get('extension_id', 'unknown'))
+        permissions_total = results.get('permissions', {}).get('total', 0)
+
+        if is_vscode:
+            third_label = 'Publisher'
+            third_value = results.get('publisher', 'Unknown')
+        else:
+            third_label = 'Manifest Version'
+            third_value = results.get('manifest_version', 'Unknown')
+
         html = f"""
         <div class="section">
             <div class="section-header">
@@ -1616,20 +2378,20 @@ class ProfessionalReportGenerator:
             </div>
             <div class="detail-grid">
                 <div class="detail-card">
-                    <div class="detail-label">Extension ID</div>
-                    <div class="detail-value" style="font-family: monospace; font-size: 13px;">{results['extension_id']}</div>
+                    <div class="detail-label">{'Identifier' if is_vscode else 'Extension ID'}</div>
+                    <div class="detail-value" style="font-family: monospace; font-size: 13px;">{ext_id}</div>
                 </div>
                 <div class="detail-card">
                     <div class="detail-label">Version</div>
                     <div class="detail-value">{results.get('version', 'Unknown')}</div>
                 </div>
                 <div class="detail-card">
-                    <div class="detail-label">Manifest Version</div>
-                    <div class="detail-value">{results.get('manifest_version', 'Unknown')}</div>
+                    <div class="detail-label">{third_label}</div>
+                    <div class="detail-value">{third_value}</div>
                 </div>
                 <div class="detail-card">
-                    <div class="detail-label">Permissions</div>
-                    <div class="detail-value">{results['permissions']['total']}</div>
+                    <div class="detail-label">{'API Usage' if is_vscode else 'Permissions'}</div>
+                    <div class="detail-value">{permissions_total}</div>
                 </div>
             </div>
             
@@ -1640,26 +2402,37 @@ class ProfessionalReportGenerator:
         # Show permission details
         permissions = results.get('permissions', {})
         perm_details = permissions.get('details', {})
-        
+        is_vscode = results.get('extension_type') == 'vscode'
+
         if permissions.get('high_risk'):
             html += '<div style="display: grid; gap: 12px;">'
-            
+
             for perm in permissions['high_risk']:
-                details = perm_details.get(perm, {})
+                # VSCode returns dicts, Chrome returns strings
+                if isinstance(perm, dict):
+                    perm_name = perm.get('permission', 'Unknown')
+                    perm_desc = perm.get('description', 'No description')
+                    perm_risk = f"High-risk API usage ({perm.get('finding_count', 'N/A')} finding(s))" if perm.get('finding_count') else 'High-risk API'
+                else:
+                    perm_name = perm
+                    details = perm_details.get(perm, {})
+                    perm_desc = details.get('description', 'No description')
+                    perm_risk = details.get('risk', 'Unknown risk')
+
                 html += f"""
                 <div style="background: rgba(239, 68, 68, 0.1); border-left: 4px solid #dc2626; padding: 15px; border-radius: 6px;">
                     <div style="font-weight: 700; font-size: 15px; color: #fca5a5; margin-bottom: 6px;">
-                        🚩 {perm}
+                        🚩 {html_module.escape(str(perm_name))}
                     </div>
                     <div style="font-size: 14px; color: #f87171; margin-bottom: 4px;">
-                        {details.get('description', 'No description')}
+                        {html_module.escape(str(perm_desc))}
                     </div>
                     <div style="font-size: 13px; color: #fca5a5; font-weight: 600;">
-                        {details.get('risk', 'Unknown risk')}
+                        {html_module.escape(str(perm_risk))}
                     </div>
                 </div>
 """
-            
+
             html += '</div>'
         else:
             html += '<div class="no-data">✅ No high-risk permissions detected</div>'
@@ -1722,30 +2495,38 @@ class ProfessionalReportGenerator:
         - HTTP method
         - Data source (what's being stolen)
         - VirusTotal cross-reference
+        - Code evidence snippets for all findings (VSCode + Chrome)
         """
-        
+
         patterns = results.get('malicious_patterns', [])
         vt_results = results.get('virustotal_results', [])
-        
+        is_vscode = results.get('extension_type') == 'vscode'
+
         # Create VT lookup map for cross-referencing
         vt_map = {}
         for vt in vt_results:
             if vt.get('known'):
                 vt_map[vt.get('domain')] = vt
-        
-        # Deduplicate patterns by destination URL
-        seen_destinations = set()
+
+        # Deduplicate patterns:
+        # - Chrome extensions: by destination URL (network-centric)
+        # - VSCode extensions: by name+file+line (code-centric)
+        seen_keys = set()
         unique_patterns = []
-        
+
         for pattern in patterns:
-            dest = pattern.get('destination', 'Unknown')
-            if dest not in seen_destinations:
-                seen_destinations.add(dest)
+            if is_vscode:
+                key = f"{pattern.get('name', '')}|{pattern.get('file', '')}|{pattern.get('line', 0)}"
+            else:
+                key = pattern.get('destination', f"{pattern.get('name', '')}|{pattern.get('file', '')}|{pattern.get('line', 0)}")
+            if key not in seen_keys:
+                seen_keys.add(key)
                 unique_patterns.append(pattern)
-        
+
+        critical_patterns = [p for p in unique_patterns if p.get('severity') == 'critical'][:10]
         high_patterns = [p for p in unique_patterns if p.get('severity') == 'high'][:10]
         medium_patterns = [p for p in unique_patterns if p.get('severity') == 'medium'][:5]
-        
+
         html = """
         <div class="section">
             <div class="section-header">
@@ -1753,21 +2534,26 @@ class ProfessionalReportGenerator:
                 <div class="section-title">Threat Analysis</div>
             </div>
 """
-        
-        if not high_patterns and not medium_patterns:
+
+        all_shown = critical_patterns + high_patterns + medium_patterns
+        if not all_shown:
             html += '<div class="no-data">✅ No malicious code patterns detected</div>'
         else:
-            for threat in high_patterns + medium_patterns:
+            for threat in all_shown:
                 # Generate context analysis explaining HOW the function is used
                 context_analysis = self._generate_context_analysis(threat)
 
+                sev = threat.get('severity', 'medium')
+                sev_icon = {'critical': '🔴', 'high': '🚨', 'medium': '⚠️', 'low': 'ℹ️'}.get(sev, '⚠️')
+                sev_css = 'high' if sev in ('critical', 'high') else sev
+
                 html += f"""
-            <div class="threat-item {threat.get('severity', 'medium')}">
+            <div class="threat-item {sev_css}">
                 <div class="threat-header">
-                    <div class="threat-name">🚨 {threat.get('name', 'Unknown Threat')}</div>
-                    <div class="threat-severity {threat.get('severity', 'medium')}">{threat.get('severity', 'medium')}</div>
+                    <div class="threat-name">{sev_icon} {html_module.escape(threat.get('name', 'Unknown Threat'))}</div>
+                    <div class="threat-severity {sev_css}">{sev}</div>
                 </div>
-                <div class="threat-description">{threat.get('description', 'No description available')}</div>
+                <div class="threat-description">{html_module.escape(threat.get('description', 'No description available'))}</div>
 """
                 # Add context analysis if available
                 if context_analysis:
@@ -1846,20 +2632,21 @@ class ProfessionalReportGenerator:
                     except:
                         pass
                 
-                # Show technique and file location
+                # Show technique/category and file location
+                technique_label = threat.get('technique') or threat.get('category', 'Unknown')
                 html += f"""
                 <div style="font-size: 13px; color: #64748b; margin: 8px 0;">
-                    <strong>Technique:</strong> {threat.get('technique', 'Unknown')}
+                    <strong>Technique:</strong> {technique_label}
                 </div>
 """
                 
-                # Add code snippet with 6-7 lines of context
-                # Prefer context_with_lines (new format) over raw context
+                # Add code snippet with context
+                # Prefer context_with_lines (Chrome multi-line) over raw context/evidence
                 context_code = threat.get('context_with_lines', '') or threat.get('context', '') or threat.get('evidence', '')
-                if context_code and len(context_code) > 20:
+                if context_code and len(context_code) > 10:
                     file_name = threat.get('file', 'unknown.js')
                     line_num = threat.get('line', 0)
-                    start_line = threat.get('context_start_line', max(1, line_num - 3))
+                    start_line = threat.get('context_start_line', max(1, line_num))
                     matched_text = threat.get('matched_text', '')
 
                     # Add matched text indicator
@@ -1867,10 +2654,22 @@ class ProfessionalReportGenerator:
                         html += f'''
                 <div style="margin: 10px 0; padding: 8px 12px; background: rgba(239, 68, 68, 0.1); border-left: 3px solid #ef4444; border-radius: 4px;">
                     <span style="color: #94a3b8; font-size: 12px;">Matched pattern:</span>
-                    <code style="color: #f87171; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-left: 8px;">{matched_text[:80]}{"..." if len(matched_text) > 80 else ""}</code>
+                    <code style="color: #f87171; background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 3px; font-size: 12px; margin-left: 8px;">{html_module.escape(matched_text[:80])}{"..." if len(matched_text) > 80 else ""}</code>
                 </div>
 '''
-                    html += self._generate_code_snippet(context_code, file_name, line_num, start_line)
+                    # For single-line evidence (VSCode findings), render as inline code block
+                    if '\n' not in context_code and not threat.get('context_with_lines'):
+                        escaped_evidence = html_module.escape(context_code.strip())
+                        html += f'''
+                <div style="margin: 10px 0; padding: 12px 15px; background: #0f172a; border-radius: 8px; border: 1px solid #374151; overflow-x: auto;">
+                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                        <span style="color: #6b7280; font-size: 11px; font-family: monospace;">{html_module.escape(file_name)}:{line_num}</span>
+                    </div>
+                    <pre style="margin: 0; font-family: 'Fira Code', 'Monaco', 'Consolas', monospace; font-size: 13px; line-height: 1.6;"><span style="color: #ef4444; min-width: 35px; display: inline-block; text-align: right; padding-right: 15px; user-select: none; border-right: 1px solid #374151; margin-right: 12px;">{line_num}</span><span style="color: #e2e8f0;">{self._apply_syntax_highlighting(escaped_evidence)}</span></pre>
+                </div>
+'''
+                    else:
+                        html += self._generate_code_snippet(context_code, file_name, line_num, start_line)
                 
                 html += f"""
                 <div class="threat-location">📍 {threat.get('file', 'Unknown file')} : Line {threat.get('line', 0)}</div>
@@ -2015,11 +2814,11 @@ class ProfessionalReportGenerator:
         # Data exfiltration context
         if 'exfil' in name or 'post' in name or 'beacon' in name:
             if 'cookie' in context_lower or 'session' in context_lower:
-                return "Data is being sent to an external server, and the code references cookies/sessions. This suggests session hijacking - the extension may be stealing authentication tokens."
+                return "Data is being sent to an external server, and the code references cookies/sessions. This pattern is consistent with session token collection - verify whether the destination is a legitimate service."
             elif 'password' in context_lower or 'credential' in context_lower:
-                return "Data exfiltration is occurring with credential-related keywords present. The extension appears to be stealing and transmitting user credentials."
+                return "Data is being sent to an external server with credential-related keywords present. Review what data is collected and whether the destination endpoint is a legitimate service."
             else:
-                return "Data is being sent to an external server. Review what data is being collected and whether the destination is a legitimate service or a potential C2 server."
+                return "Data is being sent to an external server. Review what data is being collected and whether the destination is a legitimate service or an untrusted endpoint."
 
         # Eval/code injection context
         if 'eval' in name or 'function' in name and 'dynamic' in name:
@@ -2056,7 +2855,7 @@ class ProfessionalReportGenerator:
             technique_contexts = {
                 'Credential theft': "This pattern is associated with stealing login credentials. Review the surrounding code to determine what data is being accessed and where it's sent.",
                 'Data exfiltration': "This pattern indicates data leaving the browser to an external server. Verify the destination and what data is being transmitted.",
-                'Code injection': "This allows executing arbitrary code, which can perform any action including data theft, UI modification, or loading additional malware.",
+                'Code injection': "This allows executing arbitrary code, which can perform any action including data theft, UI modification, or loading additional payloads.",
                 'Screen capture/surveillance': "Visual data capture can expose any sensitive information visible on screen, including passwords, financial data, and private messages.",
                 'Input monitoring': "Input monitoring can capture everything the user types, including passwords, personal messages, and financial information.",
             }
@@ -2190,8 +2989,8 @@ class ProfessionalReportGenerator:
         csp_findings = advanced_data.get('csp_manipulation', [])
         if csp_findings:
             html += """
-                <h3 style="margin-top: 20px; color: var(--color-critical);">⛔ CSP Manipulation Attack (CONFIRMED MALWARE)</h3>
-                <p style="margin: 10px 0; font-size: 13px;">Removes Content-Security-Policy headers to enable remote code injection. This is a <strong>confirmed malicious technique</strong>.</p>
+                <h3 style="margin-top: 20px; color: var(--color-critical);">⛔ CSP Manipulation Attack Detected</h3>
+                <p style="margin: 10px 0; font-size: 13px;">Removes Content-Security-Policy headers to enable remote code injection. This is a <strong>high-risk technique</strong> associated with malicious extensions.</p>
 """
             for finding in csp_findings[:3]:
                 # Safely get evidence
@@ -2231,11 +3030,11 @@ class ProfessionalReportGenerator:
                 </div>
 """
 
-        # WebSocket C2
+        # WebSocket suspicious connections
         ws_findings = advanced_data.get('websocket_c2', [])
         if ws_findings:
             html += """
-                <h3 style="margin-top: 20px; color: var(--color-high);">📡 WebSocket Command & Control</h3>
+                <h3 style="margin-top: 20px; color: var(--color-high);">📡 Suspicious WebSocket Connections</h3>
 """
             for finding in ws_findings[:3]:
                 # Safely get WebSocket details
@@ -2313,21 +3112,22 @@ class ProfessionalReportGenerator:
         <div class="section">
             <div class="section-header">
                 <div class="section-icon">📊</div>
-                <div class="section-title">IOC Database Cross-Reference</div>
+                <div class="section-title">Prior Analysis History</div>
             </div>
             <div class="subsection">
-                <div class="alert alert-critical">
-                    <div class="alert-icon">🚨</div>
+                <div class="alert alert-{'critical' if extension_ioc.get('risk_score', 0) >= 7 else 'high' if extension_ioc.get('risk_score', 0) >= 4 else 'medium'}">
+                    <div class="alert-icon">📋</div>
                     <div>
-                        <strong>WARNING:</strong> This extension has been previously flagged in our IOC database<br>
+                        <strong>NOTE:</strong> This extension was previously analyzed by this tool.<br>
                         <strong>First Analyzed:</strong> {extension_ioc.get('first_analyzed', 'Unknown')}<br>
-                        <strong>Risk Score:</strong> {extension_ioc.get('risk_score', 0):.1f}/10
+                        <strong>Previous Risk Score:</strong> {extension_ioc.get('risk_score', 0):.1f}/10<br>
+                        <span style="font-size: 11px; color: var(--text-secondary);">This is a local analysis record, not an external threat intelligence source.</span>
                     </div>
                 </div>
 
-                <h3 style="margin-top: 20px;">Previous Findings</h3>
+                <h3 style="margin-top: 20px;">Previously Flagged Domains</h3>
                 <div class="finding-card">
-                    <p style="margin: 5px 0; font-size: 13px;"><strong>Malicious Domains:</strong> {len(extension_ioc.get('malicious_domains', []))}</p>
+                    <p style="margin: 5px 0; font-size: 13px;"><strong>Flagged Domains:</strong> {len(extension_ioc.get('malicious_domains', []))}</p>
                     <div style="margin: 10px 0;">
 """
 
@@ -2616,7 +3416,7 @@ class ProfessionalReportGenerator:
                 html += """
                     <!-- C2 Infrastructure -->
                     <div style="background: rgba(239, 68, 68, 0.08); border-radius: 8px; padding: 14px; margin-bottom: 16px; border: 1px solid rgba(239, 68, 68, 0.15);">
-                        <div style="font-size: 11px; color: #f87171; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; font-weight: 600;">C2 Infrastructure (IOCs)</div>
+                        <div style="font-size: 11px; color: #f87171; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; font-weight: 600;">Remote Infrastructure (IOCs)</div>
                         <div style="font-family: 'Monaco', 'Consolas', monospace; font-size: 12px; color: #fca5a5;">
 """
                 for c2 in c2_infra:
@@ -2775,15 +3575,26 @@ class ProfessionalReportGenerator:
                 <h3 style="margin-top: 25px;">Threat Intelligence Sources</h3>
                 <p style="font-size: 13px; color: #64748b; margin: 10px 0;">Research verified by the following security sources:</p>
 """
+                from urllib.parse import urlparse
                 for article in source_articles:
+                    url = article.get('url', '#')
+                    title = article.get('title', url)
+                    # Some entries (e.g. cache-based ones) may not include an explicit 'source'
+                    source_label = article.get('source')
+                    if not source_label:
+                        try:
+                            domain = urlparse(url).netloc.replace('www.', '')
+                            source_label = domain or 'Unknown'
+                        except Exception:
+                            source_label = 'Unknown'
                     html += f"""
                 <div style="padding: 12px; margin: 10px 0; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0;">
                     <strong style="font-size: 14px;">
-                        <a href="{article['url']}" target="_blank" style="color: #2563eb; text-decoration: none;">
-                            {article['title']}
+                        <a href="{url}" target="_blank" style="color: #2563eb; text-decoration: none;">
+                            {title}
                         </a>
                     </strong>
-                    <p style="margin: 5px 0 0 0; font-size: 12px; color: #64748b;">Source: {article['source']}</p>
+                    <p style="margin: 5px 0 0 0; font-size: 12px; color: #64748b;">Source: {source_label}</p>
                 </div>
 """
         else:
@@ -2851,14 +3662,14 @@ class ProfessionalReportGenerator:
             # High confidence - multiple vendors
             recs = [
                 f"<strong>Priority 1:</strong> {len(vt_malicious)} domain(s) flagged by {total_detections} security vendors",
-                f"Consider blocking extension ID {results['extension_id']} pending further investigation",
+                f"Consider blocking extension ID {results.get('extension_id', results.get('identifier', 'unknown'))} pending further investigation",
                 "Review extension across deployed systems",
                 "Monitor network logs for suspicious activity",
                 "Check browser history for accessed domains"
             ]
             if has_credential_theft:
-                recs.append("<strong>If credential access confirmed:</strong> Consider password resets for affected users")
-            recs.append("Consider reporting to Chrome Web Store if malicious behavior confirmed")
+                recs.append("<strong>If credential access verified:</strong> Consider password resets for affected users")
+            recs.append("Consider reporting to extension marketplace if suspicious behavior is verified")
 
         elif vt_malicious and total_detections >= 3:
             # Moderate confidence
@@ -2870,7 +3681,7 @@ class ProfessionalReportGenerator:
                 "Evaluate business need vs security risk"
             ]
             if has_credential_theft:
-                recs.append("<strong>If credential access confirmed:</strong> Evaluate need for password resets")
+                recs.append("<strong>If credential access verified:</strong> Evaluate need for password resets")
 
         elif vt_malicious:
             # Low confidence - possible false positives
@@ -2883,12 +3694,12 @@ class ProfessionalReportGenerator:
             ]
         elif campaign:
             recs = [
-                f"<strong>Investigate:</strong> Extension behavior similar to {campaign.get('name', 'known malware')} patterns",
+                f"<strong>Investigate:</strong> Extension behavior matches {campaign.get('name', 'known suspicious')} campaign patterns",
                 "Manual verification recommended to confirm attribution",
-                f"Consider blocking extension ID {results['extension_id']} pending review",
+                f"Consider blocking extension ID {results.get('extension_id', results.get('identifier', 'unknown'))} pending review",
                 "Review systems where extension is deployed",
                 "Document findings for security team",
-                "Consider reporting if malicious behavior confirmed"
+                "Consider reporting if suspicious behavior is verified"
             ]
         elif settings.get('has_overrides'):
             recs = [
@@ -2933,18 +3744,309 @@ class ProfessionalReportGenerator:
 """
         return html
     
+    # ══════════════════════════════════════════════════════════════════════
+    # VSCode Extension Report Sections
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _generate_vscode_overview_section(self, results):
+        """Generate VSCode extension overview with marketplace metadata"""
+        metadata = results.get('store_metadata', {})
+        meta_risk = results.get('metadata_risk', {})
+
+        publisher = results.get('publisher', 'Unknown')
+        verified = metadata.get('publisher_verified', False)
+        installs = metadata.get('install_count', 0)
+        rating = metadata.get('rating_value', 0)
+        rating_count = metadata.get('rating_count', 0)
+        description = results.get('description', '')
+
+        activation_events = meta_risk.get('activation_events', [])
+        contributes = meta_risk.get('contributes', [])
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📦</div>
+                <div class="section-title">VSCode Extension Overview</div>
+            </div>
+            <div class="detail-grid">
+                <div class="detail-card">
+                    <div class="detail-label">Publisher</div>
+                    <div class="detail-value">{html_module.escape(publisher)} {'✅' if verified else '⚠️ Unverified'}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">Installs</div>
+                    <div class="detail-value">{installs:,}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">Rating</div>
+                    <div class="detail-value">{'⭐ ' + str(rating) + ' (' + str(rating_count) + ')' if rating else 'N/A'}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">Risk Score</div>
+                    <div class="detail-value" style="color: {self._get_risk_color(results.get('risk_level', 'UNKNOWN'))};">
+                        {results.get('risk_score', 0):.1f}/10
+                    </div>
+                </div>
+            </div>
+"""
+
+        if description:
+            html += f"""
+            <div style="margin-top: 15px; padding: 12px 16px; background: var(--bg-card); border-radius: 8px; color: var(--text-secondary); font-size: 14px;">
+                {html_module.escape(description[:300])}
+            </div>
+"""
+
+        # Metadata findings
+        findings = meta_risk.get('findings', [])
+        if findings:
+            html += """
+            <div style="margin-top: 20px;">
+                <h3 style="font-size: 16px; color: var(--text-primary); margin-bottom: 12px;">Metadata Risk Signals</h3>
+                <div style="display: grid; gap: 8px;">
+"""
+            for finding in findings:
+                sev = finding.get('severity', 'low')
+                sev_color = {'critical': '#ef4444', 'high': '#f97316', 'medium': '#eab308', 'low': '#22c55e'}.get(sev, '#94a3b8')
+                html += f"""
+                    <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg-card); border-left: 3px solid {sev_color}; border-radius: 6px;">
+                        <span style="background: {sev_color}; color: white; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 700; text-transform: uppercase;">{sev}</span>
+                        <span style="color: var(--text-primary); font-size: 13px;">{html_module.escape(finding.get('detail', ''))}</span>
+                    </div>
+"""
+            html += "</div></div>"
+
+        # Activation events
+        if activation_events:
+            html += f"""
+            <div style="margin-top: 15px; padding: 12px 16px; background: var(--bg-card); border-radius: 8px;">
+                <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">Activation Events</div>
+                <div style="font-family: monospace; font-size: 13px; color: var(--text-primary);">
+                    {', '.join(html_module.escape(e) for e in activation_events[:10])}
+                    {'...' if len(activation_events) > 10 else ''}
+                </div>
+            </div>
+"""
+
+        html += "</div>"
+        return html
+
+    def _generate_vscode_supply_chain_section(self, results):
+        """Generate supply chain analysis section for VSCode extensions"""
+        supply = results.get('supply_chain', {})
+        findings = supply.get('findings', [])
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔗</div>
+                <div class="section-title">Supply Chain Analysis</div>
+            </div>
+            <div class="detail-grid">
+                <div class="detail-card">
+                    <div class="detail-label">Dependencies</div>
+                    <div class="detail-value">{supply.get('dependency_count', 0)}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">Dev Dependencies</div>
+                    <div class="detail-value">{supply.get('dev_dependency_count', 0)}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">Bundled node_modules</div>
+                    <div class="detail-value">{'Yes' if supply.get('has_node_modules') else 'No'}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">Supply Chain Risk</div>
+                    <div class="detail-value" style="color: {'#ef4444' if supply.get('risk_score', 0) >= 5 else '#eab308' if supply.get('risk_score', 0) >= 2 else '#22c55e'};">
+                        {supply.get('risk_score', 0)}/10
+                    </div>
+                </div>
+            </div>
+"""
+
+        if findings:
+            # Filter out info-level for main display
+            significant = [f for f in findings if f.get('severity') != 'info']
+            if significant:
+                html += """
+            <div style="margin-top: 20px;">
+                <h3 style="font-size: 16px; color: var(--text-primary); margin-bottom: 12px;">Supply Chain Findings</h3>
+                <div style="display: grid; gap: 8px;">
+"""
+                for finding in significant:
+                    sev = finding.get('severity', 'low')
+                    sev_color = {'critical': '#ef4444', 'high': '#f97316', 'medium': '#eab308', 'low': '#22c55e'}.get(sev, '#94a3b8')
+                    html += f"""
+                    <div style="background: var(--bg-card); border-left: 3px solid {sev_color}; padding: 12px 16px; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-weight: 600; color: var(--text-primary); font-size: 14px;">{html_module.escape(finding.get('type', '').replace('_', ' ').title())}</span>
+                            <span style="background: {sev_color}; color: white; padding: 2px 8px; border-radius: 3px; font-size: 10px; font-weight: 700; text-transform: uppercase;">{sev}</span>
+                        </div>
+                        <div style="color: var(--text-secondary); font-size: 13px;">{html_module.escape(finding.get('detail', ''))}</div>
+                    </div>
+"""
+                html += "</div></div>"
+
+            # Show info-level findings in compact form
+            info_findings = [f for f in findings if f.get('severity') == 'info']
+            if info_findings:
+                html += '<div style="margin-top: 12px;">'
+                for finding in info_findings:
+                    html += f'<div style="padding: 8px 14px; color: var(--text-secondary); font-size: 13px;">ℹ️ {html_module.escape(finding.get("detail", ""))}</div>'
+                html += '</div>'
+        else:
+            html += '<div class="no-data" style="margin-top: 15px;">✅ No supply chain issues detected</div>'
+
+        html += "</div>"
+        return html
+
+    def _generate_vscode_code_analysis_section(self, results):
+        """Generate code analysis section for VSCode extensions"""
+        code = results.get('code_analysis', {})
+        findings_by_cat = code.get('findings_by_category', {})
+        findings_by_sev = code.get('findings_by_severity', {})
+        module_usage = results.get('module_usage', {})
+        breakdown = results.get('risk_breakdown', {})
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">🔬</div>
+                <div class="section-title">Deep Code Analysis</div>
+            </div>
+            <div class="detail-grid">
+                <div class="detail-card">
+                    <div class="detail-label">Files Scanned</div>
+                    <div class="detail-value">{code.get('files_scanned', 0)}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">Critical Findings</div>
+                    <div class="detail-value" style="color: #ef4444;">{findings_by_sev.get('critical', 0)}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">High Findings</div>
+                    <div class="detail-value" style="color: #f97316;">{findings_by_sev.get('high', 0)}</div>
+                </div>
+                <div class="detail-card">
+                    <div class="detail-label">Code Risk</div>
+                    <div class="detail-value">{breakdown.get('code_analysis', 0)}/4</div>
+                </div>
+            </div>
+"""
+
+        # Sensitive module usage
+        if module_usage:
+            html += """
+            <div style="margin-top: 20px;">
+                <h3 style="font-size: 16px; color: var(--text-primary); margin-bottom: 12px;">Sensitive Module Usage</h3>
+                <div style="display: grid; gap: 8px;">
+"""
+            category_icons = {
+                'file_access': '📁',
+                'network': '🌐',
+                'process_execution': '⚡',
+                'os_info': '💻',
+                'crypto': '🔐',
+                'vm': '🖥️',
+            }
+            category_risk = {
+                'process_execution': '#ef4444',
+                'network': '#f97316',
+                'file_access': '#eab308',
+                'vm': '#ef4444',
+                'os_info': '#22c55e',
+                'crypto': '#3b82f6',
+            }
+            for category, usages in module_usage.items():
+                modules = sorted(set(u['module'] for u in usages))
+                files = sorted(set(u['file'] for u in usages))
+                icon = category_icons.get(category, '📦')
+                color = category_risk.get(category, '#94a3b8')
+                html += f"""
+                    <div style="background: var(--bg-card); border-left: 3px solid {color}; padding: 12px 16px; border-radius: 6px;">
+                        <div style="font-weight: 600; color: var(--text-primary); font-size: 14px; margin-bottom: 4px;">
+                            {icon} {category.replace('_', ' ').title()}
+                        </div>
+                        <div style="font-family: monospace; font-size: 12px; color: {color}; margin-bottom: 4px;">
+                            {', '.join(html_module.escape(m) for m in modules)}
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-secondary);">
+                            Used in: {', '.join(html_module.escape(f) for f in files[:5])}{'...' if len(files) > 5 else ''}
+                        </div>
+                    </div>
+"""
+            html += "</div></div>"
+
+        # Finding categories breakdown
+        priority_categories = [
+            ('behavioral_correlation', 'Behavioral Correlation', '#ef4444'),
+            ('command_injection', 'Command Injection', '#ef4444'),
+            ('credential_theft', 'Credential Theft', '#ef4444'),
+            ('code_execution', 'Unsafe Code Execution', '#f97316'),
+            ('terminal_hijack', 'Terminal Hijacking', '#f97316'),
+            ('keylogging', 'Keystroke Monitoring', '#f97316'),
+            ('network_exfil', 'Network Exfiltration', '#f97316'),
+            ('obfuscation', 'Code Obfuscation', '#eab308'),
+            ('weak_crypto', 'Weak Cryptography', '#eab308'),
+            ('prototype_pollution', 'Prototype Pollution', '#eab308'),
+            ('webview_risk', 'Webview Security', '#eab308'),
+            ('settings_manipulation', 'Settings Manipulation', '#eab308'),
+            ('extension_hijack', 'Extension Hijacking', '#eab308'),
+            ('data_access', 'Data Access', '#3b82f6'),
+            ('reconnaissance', 'Reconnaissance', '#3b82f6'),
+        ]
+
+        active_categories = [(cat, label, color) for cat, label, color in priority_categories if cat in findings_by_cat]
+
+        if active_categories:
+            html += """
+            <div style="margin-top: 20px;">
+                <h3 style="font-size: 16px; color: var(--text-primary); margin-bottom: 12px;">Finding Categories</h3>
+                <div style="display: grid; gap: 8px;">
+"""
+            for cat, label, color in active_categories:
+                cat_findings = findings_by_cat[cat]
+                count = len(cat_findings)
+                # Show first finding as example
+                example = cat_findings[0]
+                html += f"""
+                    <div style="background: var(--bg-card); border-left: 3px solid {color}; padding: 12px 16px; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                            <span style="font-weight: 600; color: var(--text-primary); font-size: 14px;">{label}</span>
+                            <span style="background: {color}; color: white; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 700;">{count}</span>
+                        </div>
+                        <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 4px;">
+                            {html_module.escape(example.get('description', ''))}
+                        </div>
+                        <div style="font-family: monospace; font-size: 11px; color: var(--text-secondary);">
+                            {html_module.escape(example.get('file', ''))}:{example.get('line', 0)}
+                        </div>
+                    </div>
+"""
+            html += "</div></div>"
+
+        html += "</div>"
+        return html
+
     def save_professional_report(self, results, output_dir='reports'):
         """Save professional report"""
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True)
-        
+
         html = self.generate_threat_analysis_report(results)
-        
-        extension_id = results.get('extension_id', 'unknown')
-        html_path = output_dir / f"{extension_id}_threat_analysis_report.html"
-        
+
+        if results.get('extension_type') == 'vscode':
+            import re as _re
+            identifier = results.get('identifier', 'unknown')
+            safe_name = _re.sub(r'[^\w\-.]', '_', identifier)
+            html_path = output_dir / f"vscode_{safe_name}_threat_analysis_report.html"
+        else:
+            extension_id = results.get('extension_id', 'unknown')
+            html_path = output_dir / f"{extension_id}_threat_analysis_report.html"
+
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html)
-        
+
         print(f"[+] Professional threat intel report saved: {html_path}")
         return html_path
