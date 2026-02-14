@@ -7,6 +7,8 @@ src/vscode_*.py
 
 # VSCode test fixtures
 test_fixtures/
+# ai context files
+ai-context/
 
 # Local development notes
 dev-notes/
