@@ -134,6 +134,8 @@ class EnhancedStaticAnalyzer:
             'notion.so', 'api.notion.com',
             'trello.com', 'api.trello.com',
             'dropbox.com', 'api.dropboxapi.com',
+            # RFC 2606 reserved (documentation/examples — never malicious)
+            'example.com', 'example.org', 'example.net', 'www.example.com',
         ]
 
         # Malicious code patterns with better descriptions

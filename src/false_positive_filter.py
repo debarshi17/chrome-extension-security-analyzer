@@ -39,7 +39,10 @@ class FalsePositiveFilter:
         'npmjs.org', 'yarnpkg.com',
 
         # Browser vendors
-        'mozilla.org', 'microsoft.com', 'apple.com'
+        'mozilla.org', 'microsoft.com', 'apple.com',
+
+        # RFC 2606 reserved (documentation/examples — never malicious)
+        'example.com', 'example.org', 'example.net', 'example.edu', 'example.mil', 'example.int',
     }
 
     # Known benign libraries/patterns

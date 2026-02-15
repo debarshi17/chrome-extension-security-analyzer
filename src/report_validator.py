@@ -60,7 +60,7 @@ _BLOCK_COMMENT_END = re.compile(r'\*/')
 # Filter rule file extensions
 _FILTER_EXTENSIONS = {'.txt', '.lst', '.rules'}
 
-# Known benign domains (CDN, documentation, standards)
+# Known benign domains (CDN, documentation, standards; RFC 2606 example domains)
 _BENIGN_DOMAIN_PATTERNS = re.compile(
     r'(apache\.org|w3\.org|mozilla\.org|chromium\.org|github\.com|'
     r'googleapis\.com|gstatic\.com|cloudflare\.com|jquery\.com|'
@@ -68,7 +68,8 @@ _BENIGN_DOMAIN_PATTERNS = re.compile(
     r'movable-type\.co\.uk|creativecommons\.org|python\.org|'
     r'opensource\.org|blueimp\.net|pajhome\.org\.uk|'
     r'webpack\.js\.org|nodejs\.org|ecma-international\.org|'
-    r'developer\.chrome\.com|docs\.google\.com|microsoft\.com)',
+    r'developer\.chrome\.com|docs\.google\.com|microsoft\.com|'
+    r'example\.com|example\.org|example\.net|example\.edu)',
     re.IGNORECASE,
 )
 
