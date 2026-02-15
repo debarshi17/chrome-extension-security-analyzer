@@ -107,9 +107,10 @@ The extension ID is the 32-character string from the store URL:
 
 **Chrome Web Store:**
 ```
-https://chrome.google.com/webstore/detail/extension-name/abcdefghijklmnopqrstuvwxyz123456
+https://chromewebstore.google.com/detail/extension-name/abcdefghijklmnopqrstuvwxyz123456
                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 ```
+(Also works with the legacy URL: `chrome.google.com/webstore/detail/...`)
 
 **Microsoft Edge Add-ons:**
 ```
@@ -131,7 +132,8 @@ https://microsoftedge.microsoft.com/addons/detail/extension-name/abcdefghijklmno
 ### Analysis Pipeline
 - **JavaScript AST Analysis** — Resolves config variables to extract exact exfiltration destinations
 - **VirusTotal Integration** — Checks domains against 90+ security vendors
-- **Threat Campaign Attribution** — Cross-references against known malware campaigns via OSINT
+- **Threat Campaign Attribution** — Cross-references against a detection library (`data/`) and OSINT for known campaigns (e.g. VK Styles)
+- **First-Party & Listing Details** — Chrome Web Store metadata, trusted publisher detection, and listing details in reports
 - **PII Classification** — Identifies what sensitive data is accessed (credentials, cookies, financial)
 - **Dynamic Network Capture** — Runtime traffic analysis with Playwright + Chrome DevTools Protocol
 
@@ -250,9 +252,11 @@ chrome.cookies.getAll() → JSON.stringify() → fetch()
 
 ### Threat Campaign Attribution
 Cross-references extensions against:
-- Known malicious extension databases (updated regularly)
+- **Detection library** (`data/known_malicious_extensions.json`, `data/detection_artefacts.json`) — Known campaigns and IOCs from public research
 - OSINT web searches across security research sites
 - Cached attribution from previous scans
+
+See [docs/DETECTION_LIBRARY.md](docs/DETECTION_LIBRARY.md) for adding new campaigns.
 
 ### Domain Intelligence
 - DGA (Domain Generation Algorithm) detection
