@@ -404,7 +404,7 @@
       "mitre_attack": "T1027.010"
     },
     {
-      "id": "EXFIL-002",
+      "id": "EXFIL-006",
       "name": "CSRF cookie manipulation (VK/session)",
       "category": "DATA_EXFIL",
       "severity": "high",
