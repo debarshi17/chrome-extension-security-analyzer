@@ -1,0 +1,49 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "description": "Known malicious Chrome extension campaigns identified in open web search by researchers",
+    "last_updated": "2026-02-15",
+    "sources": ["Public threat research"]
+  },
+  "campaigns": {
+    "vk_styles_2026": {
+      "campaign_name": "VK Styles",
+      "threat_actor": "2vk (GitHub)",
+      "active_period": "June 2025 – January 2026",
+      "description": "Malware campaign targeting VKontakte (VK) users. Extensions pose as VK customization tools but fetch and execute remote code from VK profile metadata (dead drop) and GitHub (2vk.github.io). Capabilities: CSRF token manipulation (remixsec_redir), auto-subscription to attacker VK group (75% per session), 30-day account settings reset, donation tracking. C2 via vk.com/m0nda profile meta tags and GitHub repo '-' file 'C'. Yandex metric R-A-1686158 (computed to evade static detection).",
+      "targets": ["VKontakte (vk.com) users", "Russian-speaking and Eastern European users"],
+      "data_exfiltrated": ["VK account control", "CSRF tokens", "Account settings override", "Forced group subscriptions"],
+      "c2_infrastructure": [
+        "VK profile vk.com/m0nda (meta tag dead drop)",
+        "GitHub 2vk.github.io/-/ (payload)",
+        "Yandex/an.yandex.ru (display framework)"
+      ],
+      "ttps": {
+        "initial_access": "Chrome Web Store (trojanized VK themes)",
+        "persistence": "30-day settings reset, re-subscription on visit",
+        "collection": "VK API abuse, cookie/CSRF access",
+        "exfiltration": "Remote code load via fetch + eval/Function",
+        "c2": "VK metadata + GitHub static hosting"
+      },
+      "impact": {
+        "total_users": "502000",
+        "campaign_users": "502000",
+        "extensions_count": 5
+      },
+      "sources": [
+        {
+          "title": "VK Styles: 500K Users Infected by Chrome Extensions That Hijack VKontakte Accounts",
+          "url": "https://www.koi.ai/blog/vk-styles-500k-users-infected-by-chrome-extensions-that-hijack-vkontakte-accounts",
+          "source": "Security research"
+        }
+      ],
+      "extensions": [
+        {"id": "ceibjdigmfbbgcpkkdpmjokkokklodmc", "status": "removed", "severity": "CRITICAL", "install_count": "400000"},
+        {"id": "mflibpdjoodmoppignjhciadahapkoch", "status": "active", "severity": "CRITICAL", "install_count": "80000"},
+        {"id": "lgakkahjfibfgmacigibnhcgepajgfdb", "status": "active", "severity": "CRITICAL", "install_count": "20000"},
+        {"id": "bndkfmmbidllaiccmpnbdonijmicaafn", "status": "active", "severity": "CRITICAL", "install_count": "2000"},
+        {"id": "pcdgkgbadeggbnodegejccjffnoakcoh", "status": "removed", "severity": "CRITICAL", "install_count": "2000"}
+      ]
+    }
+  }
+}

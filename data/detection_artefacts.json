@@ -1,0 +1,30 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "description": "Detection artefacts and IOCs from campaigns identified as malicious in open web search by researchers. Used for pattern matching and domain/URL checks.",
+    "last_updated": "2026-02-15"
+  },
+  "campaigns": {
+    "vk_styles": {
+      "extension_ids": [
+        "ceibjdigmfbbgcpkkdpmjokkokklodmc",
+        "mflibpdjoodmoppignjhciadahapkoch",
+        "lgakkahjfibfgmacigibnhcgepajgfdb",
+        "bndkfmmbidllaiccmpnbdonijmicaafn",
+        "pcdgkgbadeggbnodegejccjffnoakcoh"
+      ],
+      "domains_and_urls": [
+        "vk.com/m0nda",
+        "2vk.github.io",
+        "an.yandex.ru",
+        "yastatic.net"
+      ],
+      "cookie_names": ["remixsec_redir"],
+      "patterns": {
+        "yandex_metric_literal": "R-A-1686158",
+        "yandex_metric_computed": "'R-A-' + 843079 * 2"
+      },
+      "notes": "VK account hijack; C2 via meta tag dead drop; CSRF cookie manipulation; 30-day settings reset."
+    }
+  }
+}

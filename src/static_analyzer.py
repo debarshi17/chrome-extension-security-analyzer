@@ -661,6 +661,27 @@ class EnhancedStaticAnalyzer:
                 'technique': 'CSRF token theft'
             },
             {
+                'name': 'CSRF/Session Cookie Manipulation (VK/remixsec)',
+                'pattern': r'remixsec|remixsec_redir',
+                'severity': 'high',
+                'description': 'References VK CSRF protection cookie - used by VK Styles malware to bypass origin checks',
+                'technique': 'CSRF cookie manipulation'
+            },
+            {
+                'name': 'C2/Config from meta tag (dead drop)',
+                'pattern': r'getAttribute\s*\(\s*["\']content["\']\s*\)[\s\S]{0,250}(?:fetch|XMLHttpRequest|\.src\s*=)|querySelector\s*\([^)]*meta[^)]*\)[\s\S]{0,150}\.content[\s\S]{0,200}(?:fetch|\.src)',
+                'severity': 'critical',
+                'description': 'Parses meta tag content then uses for fetch/URL - C2 via page metadata (VK Styles TTP)',
+                'technique': 'Meta tag dead drop'
+            },
+            {
+                'name': 'Computed analytics/tracking ID (evasion)',
+                'pattern': r'["\']R-A-["\']\s*\+\s*[^;]+(?:\*\s*2)?|["\']R-A-["\']\s*\+\s*\d+\s*\*\s*\d+',
+                'severity': 'high',
+                'description': 'Analytics ID built at runtime to evade static search - VK Styles Yandex metric pattern',
+                'technique': 'Tracking ID evasion'
+            },
+            {
                 'name': 'Hidden Input Enumeration',
                 'pattern': r'input\[type=["\']?hidden["\']?\]|querySelectorAll?\s*\([^)]*hidden',
                 'severity': 'medium',
@@ -1407,7 +1428,7 @@ class EnhancedStaticAnalyzer:
                 print(f"[!] Warning: Failed to compile pattern '{pattern_def['name']}': {e}")
 
     # Cap file size for pattern-scan read to avoid slow regex/entropy on huge bundles
-    _MAX_READ_SIZE_FOR_SCAN = 1 * 1024 * 1024  # 1 MiB
+    _MAX_READ_SIZE_FOR_SCAN = 2 * 1024 * 1024  # 2 MiB (raised so large index.js bundles get more pattern coverage)
 
     def _read_file_cached(self, file_path):
         """Read file content with caching to avoid multiple reads
@@ -1723,9 +1744,10 @@ class EnhancedStaticAnalyzer:
 
         return default
 
-    def analyze_extension(self, extension_dir):
+    def analyze_extension(self, extension_dir, progress_callback=None):
         """
-        Perform complete static analysis on an extension
+        Perform complete static analysis on an extension.
+        progress_callback: optional callable(phase_percent_0_to_100, detail_str) for UI progress.
         """
         extension_dir = Path(extension_dir)
         
@@ -1836,6 +1858,9 @@ class EnhancedStaticAnalyzer:
             print(f"[+] Scanning {len(js_files)} JavaScript files...")
         # Run AST analysis (CRITICAL - shows exact POST destinations)
         print(f"[+] Running AST analysis...")
+        _total_files = len(js_files)
+        if progress_callback:
+            progress_callback(0, "Running AST analysis...")
         try:
             from tqdm import tqdm
             _use_progress = True
@@ -1843,12 +1868,14 @@ class EnhancedStaticAnalyzer:
             _use_progress = False
         if _use_progress:
             # One progress bar for static analysis: 0-50% AST, 50-100% pattern scan
-            _total_steps = 2 * len(js_files)
+            _total_steps = 2 * _total_files
             _pbar = tqdm(total=_total_steps, desc="Static analysis", unit="file", leave=True, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} ({percentage:3.0f}%)")
             _pbar.update(0)
             results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir, progress_callback=lambda: _pbar.update(1), js_file_list=js_files)
         else:
             results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir, js_file_list=js_files)
+        if progress_callback:
+            progress_callback(50, "AST complete. Scanning files for patterns...")
         
         # Merge AST findings into malicious_patterns
         for exfil in results['ast_results'].get('data_exfiltration', []):
@@ -1918,11 +1945,17 @@ class EnhancedStaticAnalyzer:
                     pass
                 if _use_progress:
                     _pbar.update(1)
+                if progress_callback and _total_files:
+                    phase_pct = 50 + 50 * (idx + 1) // _total_files
+                    progress_callback(min(phase_pct, 99), f"File {idx + 1}/{_total_files}")
             except Exception as e:
                 results['scan_coverage']['files_with_scan_errors'] += 1
                 print(f"[!] Error scanning {js_file.name}: {e}")
                 if _use_progress:
                     _pbar.update(1)
+                if progress_callback and _total_files:
+                    phase_pct = 50 + 50 * (idx + 1) // _total_files
+                    progress_callback(min(phase_pct, 99), f"File {idx + 1}/{_total_files}")
 
         if results['scan_coverage']['files_with_scan_errors']:
             print(f"[i] Scan coverage: {results['scan_coverage']['files_fully_scanned']}/{results['scan_coverage']['total_js_files']} files fully scanned, {results['scan_coverage']['files_with_scan_errors']} with fallback/errors")
@@ -2561,6 +2594,22 @@ class EnhancedStaticAnalyzer:
                     if is_first_party and effective_severity in ['high', 'medium']:
                         effective_severity = 'low'
                         downgrade_reason = f'first_party_domain:{first_party_domain}'
+
+                # ── FP suppression: skip findings that need extra context we can check here ──
+                pname = pattern_def.get('name', '')
+                if pname == 'Keystroke Buffer Array':
+                    if not re.search(r'addEventListener\s*\(\s*["\']key(down|up|press)', code, re.IGNORECASE):
+                        continue  # No keyboard listener in file → library/metadata usage, not keylogger
+                if pname == 'Input Value Direct Access':
+                    combined = (raw_context or '') + (matched_text or '')
+                    if not re.search(r'(password|credit|card|ssn|cvv|fetch\s*\(|XMLHttpRequest|sendBeacon)', combined, re.IGNORECASE):
+                        continue  # No sensitive field or exfil in context → generic form handling
+                if pname == 'Chrome Storage Sync Abuse':
+                    combined = (raw_context or '') + (matched_text or '')
+                    has_benign = bool(re.search(r'(analytics|settings|preferences|config|options|theme|enabled|whitelist|blocklist)', combined, re.IGNORECASE))
+                    has_sensitive = bool(re.search(r'(password|credential|cookie|token|session|auth|credit|card)', combined, re.IGNORECASE))
+                    if has_benign and not has_sensitive:
+                        continue  # Only storing settings/analytics, not credentials
 
                 found_patterns.append({
                     'name': pattern_def['name'],
@@ -3225,9 +3274,22 @@ class EnhancedStaticAnalyzer:
         infra_component = min(infra, 2.0)
         breakdown['infrastructure'] = round(infra_component, 2)
 
-        # ---------- Positive Signals (up to -1.5) ----------
+        # ---------- Positive Signals (discount for trust) ----------
         positive_reduction = 0.0
         store = results.get('store_metadata', {})
+        author = (store.get('author') or '').strip()
+        author_lower = author.lower()
+        # First token (e.g. "Google" from "Google LLC") for matching
+        author_first = author_lower.split()[0].rstrip(',') if author_lower else ''
+        # Chrome Web Store verified badge OR known legitimate publisher names
+        author_verified = store.get('author_verified', False)
+        trusted_publishers = frozenset({
+            'google', 'microsoft', 'mozilla', 'apple', 'adobe', 'opera', 'brave',
+            'duckduckgo', 'meta', 'facebook', 'grammarly', 'lastpass', 'bitwarden',
+            '1password', 'dropbox', 'notion', 'slack', 'zoom', 'cisco', 'vmware',
+            'atlassian', 'jetbrains', 'github', 'gitlab', 'cloudflare', 'akamai',
+        })
+        is_trusted_publisher = author_verified or (author_lower in trusted_publishers) or (author_first in trusted_publishers)
 
         # High user count = more trust
         user_count = store.get('user_count', 0) or 0
@@ -3236,26 +3298,36 @@ class EnhancedStaticAnalyzer:
         elif user_count > 10000:
             positive_reduction += 0.3
 
-        # Verified author
-        if store.get('author_verified'):
-            positive_reduction += 0.2
+        # Verified or trusted publisher: stronger discount so legitimate devs (e.g. Google Translate) score lower
+        if author_verified:
+            positive_reduction += 0.3
+        if (author_lower in trusted_publishers) or (author_first in trusted_publishers):
+            positive_reduction += 0.4  # Known legitimate publisher
 
         # Very narrow permission scope (no high-risk perms, no attack paths)
         if not perms.get('high_risk') and not perms.get('attack_paths'):
             positive_reduction += 0.3
 
-        # Suppress positive signals if critical correlations exist
+        # Suppress positive signals if critical correlations or critical code findings exist (don't trust store when code is malicious)
         if bc_crit > 0:
             positive_reduction = 0.0
-
-        positive_reduction = min(positive_reduction, 1.5)
+        if crit_count > 0:
+            positive_reduction = 0.0  # Critical code finding (eval, remote script, etc.) — no trust discount
+        # Trusted publisher cap: allow up to -2.5 so medium-risk drops to LOW when no critical behavior
+        max_reduction = 2.5 if is_trusted_publisher else 1.5
+        positive_reduction = min(positive_reduction, max_reduction)
         breakdown['positive_signals'] = round(-positive_reduction, 2)
+        if is_trusted_publisher:
+            breakdown['trusted_publisher'] = author or 'verified'
 
         # ---------- Combine ----------
         raw_score = (perm_component + code_component + bc_component
                      + infra_component - positive_reduction)
 
         # ---------- Malice Floor (V3 — tighter) ----------
+        # Critical code finding (eval, remote script injection, etc.) → at least MEDIUM
+        if crit_count >= 1:
+            raw_score = max(raw_score, 4.0)
         # Behavioral correlation floors
         if bc_crit >= 2:
             raw_score = max(raw_score, 7.0)  # At least HIGH
@@ -3288,6 +3360,8 @@ class EnhancedStaticAnalyzer:
 
         # Store breakdown for debugging
         results['risk_breakdown'] = breakdown
+        # First-party: trusted publisher (Google, Microsoft, etc.)
+        results['first_party'] = bool(breakdown.get('trusted_publisher'))
 
         return round(final_score, 1)
     
@@ -3470,7 +3544,13 @@ class EnhancedStaticAnalyzer:
                 summary = 'Moderate risk signals detected. Review recommended.'
             else:
                 classification = 'LOW_RISK'
-                summary = 'No significant threat indicators detected.'
+                # First-party / trusted publisher — explain why low risk
+                first_party = results.get('first_party') or bool(results.get('risk_breakdown', {}).get('trusted_publisher'))
+                if first_party:
+                    summary = ('First-party or trusted publisher; limited permissions and no critical '
+                              'behavioral findings. Low risk consistent with legitimate extension.')
+                else:
+                    summary = 'No significant threat indicators detected.'
         else:
             crit_count = sum(1 for c in correlations if c['severity'] == 'critical')
             if crit_count >= 2:

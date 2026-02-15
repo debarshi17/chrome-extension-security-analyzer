@@ -10,7 +10,8 @@ from pathlib import Path
 from collections import defaultdict
 
 # Max file size for full AST parsing (larger files skip AST to avoid hangs)
-MAX_FILE_SIZE_FOR_AST = 1 * 1024 * 1024  # 1 MiB
+# Raised to 3 MiB so important bundles (e.g. background index.js) are fully parsed
+MAX_FILE_SIZE_FOR_AST = 3 * 1024 * 1024  # 3 MiB
 # Max recursion depth in AST traversal to prevent runaway / stack overflow
 MAX_TRAVERSE_DEPTH = 10000
 

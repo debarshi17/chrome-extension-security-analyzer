@@ -885,6 +885,7 @@ class ProfessionalReportGenerator:
                         <h1 style="font-size: 24px; margin-bottom: 4px;">{extension_name}</h1>
                         <div class="subtitle" style="font-size: 12px; opacity: 0.7; margin-bottom: 2px;">{extension_id}</div>
                         <div class="subtitle">Threat Analysis Report • {datetime.now().strftime('%B %d, %Y at %H:%M UTC')}</div>
+                        {self._render_first_party_badge(results)}
                     </div>
                 </div>
                 <div class="classification-badge">{risk_level} RISK</div>
@@ -938,6 +939,10 @@ class ProfessionalReportGenerator:
         # Risk Score Breakdown (V2)
         if results.get('risk_breakdown'):
             html += self._generate_risk_breakdown_section(results)
+
+        # Chrome Web Store listing details (Developer, First-party, Flags, Users, etc.)
+        if results.get('extension_type') != 'vscode' and results.get('store_metadata', {}).get('available'):
+            html += self._generate_listing_details_section(results)
 
         # Behavioral Threat Analysis (V2)
         bc_data = results.get('behavioral_correlations', {})
@@ -1034,6 +1039,19 @@ class ProfessionalReportGenerator:
 """
         
         return html
+
+    def _render_first_party_badge(self, results):
+        """Render First-party badge when extension is from trusted publisher."""
+        first_party = results.get('first_party') or bool(results.get('risk_breakdown', {}).get('trusted_publisher'))
+        if not first_party:
+            return ''
+        return (
+            '<div style="margin-top: 8px;">'
+            '<span style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; '
+            'background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.4); '
+            'border-radius: 6px; font-size: 11px; font-weight: 600; color: #86efac; letter-spacing: 0.3px;">'
+            '✓ First-party</span></div>'
+        )
     
     def _get_risk_color(self, risk_level):
         """Get color for risk level"""
@@ -1419,6 +1437,63 @@ class ProfessionalReportGenerator:
                     </div>
 """
         html += """
+                </div>
+            </div>
+        </div>
+"""
+        return html
+
+    def _generate_listing_details_section(self, results):
+        """Chrome Web Store listing details (Developer, First-party, Flags, Users, etc.)."""
+        store = results.get('store_metadata', {})
+        author = store.get('author', 'Unknown')
+        first_party = results.get('first_party') or bool(results.get('risk_breakdown', {}).get('trusted_publisher'))
+        flags = []
+        if store.get('featured'):
+            flags.append('featured')
+        if store.get('trader'):
+            flags.append('trader')
+        flags_str = ', '.join(flags) if flags else '—'
+        users = store.get('user_count_text', 'Unknown')
+        rating = store.get('rating')
+        rating_str = str(rating) if rating is not None else 'N/A'
+        version = store.get('version', results.get('version', 'Unknown'))
+        last_updated = store.get('last_updated_text', 'Unknown')
+
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📋</div>
+                <div class="section-title">Listing details</div>
+            </div>
+            <div class="detail-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px;">
+                <div class="detail-card" style="background: var(--bg-card); padding: 14px 18px; border-radius: 8px;">
+                    <div class="detail-label" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">Developer</div>
+                    <div class="detail-value" style="font-size: 14px; font-weight: 600; color: var(--text-primary);">{html_module.escape(author)}</div>
+                </div>
+                <div class="detail-card" style="background: var(--bg-card); padding: 14px 18px; border-radius: 8px;">
+                    <div class="detail-label" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">First-party</div>
+                    <div class="detail-value" style="font-size: 14px; font-weight: 600; color: {('#86efac' if first_party else 'var(--text-secondary)')};">{('Yes' if first_party else 'No')}</div>
+                </div>
+                <div class="detail-card" style="background: var(--bg-card); padding: 14px 18px; border-radius: 8px;">
+                    <div class="detail-label" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">Flags</div>
+                    <div class="detail-value" style="font-size: 13px; color: var(--text-primary);">{html_module.escape(flags_str)}</div>
+                </div>
+                <div class="detail-card" style="background: var(--bg-card); padding: 14px 18px; border-radius: 8px;">
+                    <div class="detail-label" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">Users</div>
+                    <div class="detail-value" style="font-size: 14px; color: var(--text-primary);">{html_module.escape(users)}</div>
+                </div>
+                <div class="detail-card" style="background: var(--bg-card); padding: 14px 18px; border-radius: 8px;">
+                    <div class="detail-label" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">Rating</div>
+                    <div class="detail-value" style="font-size: 14px; color: var(--text-primary);">{html_module.escape(rating_str)}</div>
+                </div>
+                <div class="detail-card" style="background: var(--bg-card); padding: 14px 18px; border-radius: 8px;">
+                    <div class="detail-label" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">Version</div>
+                    <div class="detail-value" style="font-size: 14px; color: var(--text-primary);">{html_module.escape(str(version))}</div>
+                </div>
+                <div class="detail-card" style="background: var(--bg-card); padding: 14px 18px; border-radius: 8px;">
+                    <div class="detail-label" style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">Last updated</div>
+                    <div class="detail-value" style="font-size: 14px; color: var(--text-primary);">{html_module.escape(str(last_updated))}</div>
                 </div>
             </div>
         </div>

@@ -203,11 +203,13 @@ class ChromeExtensionAnalyzer:
                 print(f"    [CRITICAL] Gmail surveillance module: {gm['file']} "
                       f"({gm['indicator_count']} indicators)")
 
-        # Step 3: Static Analysis (longest step)
-        _progress(25, "Static analysis", "Scanning code for malicious patterns...")
+        # Step 3: Static Analysis (longest step) — report sub-progress 25–45%
+        def _static_progress(phase_pct_0_to_100, detail):
+            pct = 25 + (phase_pct_0_to_100 * 20) // 100
+            _progress(min(pct, 45), "Static analysis", detail)
         print("\n[SCAN] STEP 3: Performing static analysis...")
         print("-" * 80)
-        results = self.analyzer.analyze_extension(extension_dir)
+        results = self.analyzer.analyze_extension(extension_dir, progress_callback=_static_progress)
         _progress(45, "Static analysis", "Static analysis complete.")
 
         if not results:
@@ -609,16 +611,15 @@ class ChromeExtensionAnalyzer:
         # Always store current analysis as baseline for next comparison
         self.version_diff.store_baseline(extension_id, results)
 
-        # Step 9: Generate Reports
+        # Step 9: Generate Reports (sub-progress 92 → 98%)
         _progress(92, "Report", "Generating threat intelligence report...")
         print("\n[REPORT] STEP 9: Generating professional reports...")
         print("-" * 80)
 
-        # Save JSON report (detailed data)
         output_dir = getattr(self, 'report_output_dir', None) or 'reports'
+        _progress(93, "Report", "Writing JSON report...")
         json_report = self.analyzer.save_report(results, output_dir=output_dir)
-
-        # Generate professional HTML report
+        _progress(96, "Report", "Writing HTML report...")
         html_report = self.reporter.save_professional_report(results, output_dir=output_dir)
 
         # Print Summary
@@ -1082,12 +1083,16 @@ class ChromeExtensionAnalyzer:
         
         return vt_results
 
+    # Max JS files to run taint/enhanced detection on (avoids hang on extensions with huge node_modules)
+    _ENHANCED_DETECTION_MAX_JS_FILES = 300
+    # Max bytes to read per file (oversized files are analyzed up to this limit, not skipped)
+    _ENHANCED_DETECTION_MAX_READ_SIZE = 4 * 1024 * 1024  # 4 MiB
+
     def _run_enhanced_detection(self, extension_dir):
         """
         Run enhanced detection including taint analysis, crypto theft, and phishing detection.
-
-        Returns:
-            dict: Enhanced detection results with taint flows, crypto findings, etc.
+        Uses a security-relevant file set (excludes node_modules/bower_components, caps count)
+        to avoid infinite or multi-hour runs on large extensions.
         """
         from pathlib import Path
         extension_dir = Path(extension_dir)
@@ -1108,14 +1113,33 @@ class ChromeExtensionAnalyzer:
             }
         }
 
-        js_files = list(extension_dir.rglob('*.js'))
+        # Collect JS files but exclude node_modules/bower_components (same as static analyzer)
+        all_js = []
+        for p in extension_dir.rglob('*.js'):
+            try:
+                rel = str(p.relative_to(extension_dir))
+                if 'node_modules' in rel or 'bower_components' in rel:
+                    continue
+                all_js.append(p)
+            except ValueError:
+                continue
+        # Prioritize: manifest-referenced names first, then by path relevance, then cap total
+        def _relevance(p):
+            rel = str(p.relative_to(extension_dir)).lower()
+            if 'background' in rel or 'content' in rel or 'service_worker' in rel or 'inject' in rel:
+                return 0
+            if 'popup' in rel or 'options' in rel or 'auth' in rel or 'api' in rel:
+                return 1
+            return 2
+        all_js.sort(key=lambda p: (_relevance(p), len(str(p))))
+        js_files = all_js[: self._ENHANCED_DETECTION_MAX_JS_FILES]
 
         for js_file in js_files:
             try:
                 with open(js_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-
+                    content = f.read(self._ENHANCED_DETECTION_MAX_READ_SIZE)
                 relative_path = str(js_file.relative_to(extension_dir))
+                # Analyze truncated content for oversized files (important index.js often 2–4 MiB)
 
                 # 1. Taint analysis
                 taint_results = self.taint_analyzer.analyze_file(relative_path, content)

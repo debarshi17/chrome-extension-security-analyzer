@@ -382,8 +382,35 @@
       "category": "INJECTION",
       "severity": "critical",
       "description": "Fetches remote content and passes to eval/Function",
-      "regex": "fetch\\s*\\([^)]+\\)[\\s\\S]{0,200}(eval|Function|new\\s+Function)\\s*\\(",
+      "regex": "fetch\\s*\\([^)]+\\)[\\s\\S]{0,500}(eval|Function|new\\s+Function)\\s*\\(",
       "mitre_attack": "T1059.007"
+    },
+    {
+      "id": "INJECT-003",
+      "name": "C2/Config from meta tag (dead drop)",
+      "category": "INJECTION",
+      "severity": "critical",
+      "description": "Parses meta tag content (e.g. getAttribute('content')) then uses for fetch/URL - VK Styles style C2 via page metadata",
+      "regex": "(getAttribute\\s*\\(\\s*['\"]content['\"]\\s*\\)|querySelector\\s*\\([^)]*meta[^)]*\\)[\\s\\S]{0,80}\\.content)[\\s\\S]{0,300}(fetch|XMLHttpRequest|location\\.href|script\\.src)\\s*[=(]",
+      "mitre_attack": "T1102"
+    },
+    {
+      "id": "OBF-007",
+      "name": "Computed analytics/tracking ID (evasion)",
+      "category": "OBFUSCATION",
+      "severity": "high",
+      "description": "Analytics or tracking ID built at runtime (e.g. 'R-A-' + N*2) to evade static string search - seen in VK Styles Yandex metric",
+      "regex": "['\"]R-A-['\"]\\s*\\+\\s*[^;]+(\\*\\s*2)?|['\"]R-A-['\"]\\s*\\+\\s*\\d+\\s*\\*\\s*\\d+",
+      "mitre_attack": "T1027.010"
+    },
+    {
+      "id": "EXFIL-002",
+      "name": "CSRF cookie manipulation (VK/session)",
+      "category": "DATA_EXFIL",
+      "severity": "high",
+      "description": "Reads or manipulates known CSRF protection cookie (e.g. remixsec_redir) to bypass origin checks - VK Styles TTP",
+      "regex": "remixsec|remixsec_redir|csrf[_-]?token|_csrf|xsrf[_-]?token",
+      "mitre_attack": "T1557"
     }
   ],
   "regex_library": {

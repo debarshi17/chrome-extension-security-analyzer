@@ -161,17 +161,33 @@
             height: 100%;
             background: linear-gradient(90deg, #3b82f6, #8b5cf6);
             border-radius: 5px;
-            transition: width 0.3s ease;
+            transition: width 0.2s ease;
+        }
+
+        .progress-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 8px;
+            gap: 12px;
         }
 
         .progress-step {
             font-size: 14px;
             color: #94a3b8;
-            margin-top: 6px;
+            flex: 1;
+            min-width: 0;
         }
 
         .progress-step strong {
             color: #60a5fa;
+        }
+
+        .progress-percent {
+            font-size: 13px;
+            font-weight: 600;
+            color: #60a5fa;
+            flex-shrink: 0;
         }
 
         .spinner {
@@ -302,7 +318,10 @@
                 <div class="progress-bar-wrapper">
                     <div id="progressBar" class="progress-bar-fill" style="width: 0%"></div>
                 </div>
-                <div id="progressStep" class="progress-step"></div>
+                <div class="progress-meta">
+                    <div id="progressStep" class="progress-step"></div>
+                    <span id="progressPercent" class="progress-percent">0%</span>
+                </div>
                 <button id="cancelBtn" onclick="cancelAnalysis()" style="display:none; margin-top:12px; padding:8px 20px; background:#dc2626; color:white; border:none; border-radius:8px; cursor:pointer; font-size:14px;">Cancel scan</button>
             </div>
         </div>
@@ -351,6 +370,8 @@
             progressContainer.classList.add('active');
             progressBar.style.width = '0%';
             progressStep.textContent = 'Starting analysis...';
+            const progressPercent = document.getElementById('progressPercent');
+            if (progressPercent) progressPercent.textContent = '0%';
             document.getElementById('cancelBtn').style.display = 'inline-block';
 
             try {
@@ -397,11 +418,13 @@
                     const progressStep = document.getElementById('progressStep');
 
                     if (data.status === 'running') {
-                        const pct = data.percent || 0;
+                        const pct = data.percent ?? 0;
                         progressBar.style.width = pct + '%';
+                        const progressPercentEl = document.getElementById('progressPercent');
+                        if (progressPercentEl) progressPercentEl.textContent = pct + '%';
                         const step = data.step_name || 'Processing';
                         const detail = data.detail || '';
-                        progressStep.innerHTML = `<strong>${step}</strong>${detail ? ': ' + detail : ''}`;
+                        progressStep.innerHTML = detail ? `<strong>${step}</strong><br><span style="color:#64748b;font-size:12px;">${detail}</span>` : `<strong>${step}</strong>`;
                         return;
                     }
 

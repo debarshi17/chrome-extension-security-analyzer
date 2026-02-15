@@ -169,7 +169,9 @@ class TaintAnalyzer:
         self.all_sinks.update(TaintSink.CLIPBOARD_SINKS)
 
     # esprima can hang or consume excessive memory on files larger than this
-    MAX_AST_PARSE_SIZE = 2 * 1024 * 1024  # 2 MiB
+    MAX_AST_PARSE_SIZE = 3 * 1024 * 1024  # 3 MiB (raised so important index.js/service_worker bundles are analyzed)
+    # Prevent runaway recursion on very deep or degenerate ASTs (minified/bundled code)
+    MAX_TRAVERSE_DEPTH = 10000
 
     def analyze_file(self, file_path: str, content: str) -> List[Dict]:
         """
@@ -197,10 +199,10 @@ class TaintAnalyzer:
             ast = esprima.parseScript(content, {'loc': True, 'range': True, 'tolerant': True})
 
             # First pass: identify taint sources and track variable assignments
-            self._find_taint_sources(ast)
+            self._find_taint_sources(ast, depth=0)
 
             # Second pass: detect when tainted data flows to sinks
-            self._find_sink_flows(ast)
+            self._find_sink_flows(ast, depth=0)
 
         except Exception as e:
             # If parsing fails, fall back to regex-based detection
@@ -254,9 +256,10 @@ class TaintAnalyzer:
 
         return results
 
-    def _find_taint_sources(self, node, parent_var: str = None):
-        """Recursively find taint sources in AST and track assignments"""
-
+    def _find_taint_sources(self, node, parent_var: str = None, depth: int = 0):
+        """Recursively find taint sources in AST and track assignments."""
+        if depth > self.MAX_TRAVERSE_DEPTH:
+            return
         if node is None or not hasattr(node, 'type'):
             return
 
@@ -329,11 +332,12 @@ class TaintAnalyzer:
                                 self.tainted_variables[param_name] = tainted
 
         # Recursively traverse child nodes
-        self._traverse_children(node, self._find_taint_sources)
+        self._traverse_children(node, lambda n: self._find_taint_sources(n, depth=depth + 1))
 
-    def _find_sink_flows(self, node):
-        """Find when tainted data flows to dangerous sinks"""
-
+    def _find_sink_flows(self, node, depth: int = 0):
+        """Find when tainted data flows to dangerous sinks."""
+        if depth > self.MAX_TRAVERSE_DEPTH:
+            return
         if node is None or not hasattr(node, 'type'):
             return
 
@@ -375,7 +379,7 @@ class TaintAnalyzer:
                 pass  # Handled in CallExpression
 
         # Recursively traverse child nodes
-        self._traverse_children(node, self._find_sink_flows)
+        self._traverse_children(node, lambda n: self._find_sink_flows(n, depth + 1))
 
     def _is_taint_source(self, node) -> Optional[Dict]:
         """Check if a node represents a taint source"""

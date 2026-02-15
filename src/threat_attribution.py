@@ -65,16 +65,18 @@ class ThreatAttribution:
             'threat intelligence', 'campaign', 'infected', 'compromised',
             # Risk labels
             'risky', 'scam', 'suspicious extension', 'harmful',
-            # Research vendors
-            'layerx', 'koi security', 'koi.ai'
+            # Research / intel
+            'layerx', 'security research', 'threat research',
+            # VK Styles / VKontakte campaign
+            'vk styles', 'vkontakte', 'account hijack', '500k users infected'
         ]
 
-        # Canonical reference for DarkSpectre/ShadyPanda/ZoomStealer (Koi Research - primary source)
+        # Canonical reference for DarkSpectre/ShadyPanda/ZoomStealer (from public threat research)
         self.CANONICAL_DARKSPECTRE_URL = 'https://www.koi.ai/blog/darkspectre-unmasking-the-threat-actor-behind-7-8-million-infected-browsers'
         self.CANONICAL_DARKSPECTRE_ARTICLE = {
             'title': 'DarkSpectre: Unmasking the Threat Actor Behind 8.8 Million Infected Browsers',
             'url': self.CANONICAL_DARKSPECTRE_URL,
-            'source': 'Koi Security'
+            'source': 'Security research'
         }
         # Benign lists that must not be shown as threat intel (e.g. awesome lists that list extension IDs for reference)
         self.BENIGN_SOURCE_PATTERNS = [
@@ -106,7 +108,7 @@ class ThreatAttribution:
             return {'campaigns': {}, 'metadata': {}}
 
     def _normalize_source_articles(self, source_articles, campaign_name):
-        """Filter out benign list URLs and ensure canonical Koi reference first for DarkSpectre/ShadyPanda/ZoomStealer."""
+        """Filter out benign list URLs and ensure canonical reference first for DarkSpectre/ShadyPanda/ZoomStealer."""
         if not source_articles:
             source_articles = []
         campaign = (campaign_name or '').lower()
@@ -118,7 +120,7 @@ class ThreatAttribution:
                 continue
             filtered.append(a)
         if is_darkspectre:
-            # Prefer Koi as primary reference; avoid duplicate
+            # Prefer canonical reference first; avoid duplicate
             koi_url = self.CANONICAL_DARKSPECTRE_URL.lower()
             filtered = [self.CANONICAL_DARKSPECTRE_ARTICLE] + [
                 x for x in filtered if (x.get('url') or '').lower() != koi_url
@@ -601,7 +603,7 @@ class ThreatAttribution:
             # Other security blogs
             ('https://blog.malwarebytes.com/?s=', 'Malwarebytes', '/blog/'),
             ('https://www.sentinelone.com/?s=', 'SentinelOne', '/blog/'),
-            ('https://www.koi.ai/?s=', 'Koi Security', '/blog/'),
+            ('https://www.koi.ai/?s=', 'Security research', '/blog/'),
         ]
 
         print(f"    Checking {len(security_sites)} security research sites directly...")
@@ -1021,7 +1023,7 @@ The ZoomStealer campaign is part of DarkSpectre's operations, employing 18 malic
                     {
                         'title': 'DarkSpectre: Unmasking the Threat Actor Behind 8.8 Million Infected Browsers',
                         'url': 'https://www.koi.ai/blog/darkspectre-unmasking-the-threat-actor-behind-7-8-million-infected-browsers',
-                        'source': 'Koi Security'
+                        'source': 'Security research'
                     },
                     {
                         'title': 'Zoom Stealer browser extensions harvest corporate meeting intelligence',
