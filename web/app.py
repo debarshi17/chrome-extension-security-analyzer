@@ -89,7 +89,7 @@ def _run_analysis(extension_id: str):
         results = analyzer.analyze_extension(extension_id, progress_callback=progress_callback)
 
         if results:
-            report_path = REPORTS_DIR / f"{extension_id}_threat_intel_report.html"
+            report_path = REPORTS_DIR / f"{extension_id}_threat_analysis_report.html"
             if report_path.exists():
                 analysis_jobs[extension_id] = {
                     "status": "complete",
@@ -152,9 +152,13 @@ async def analyze_extension(req: AnalysisRequest, background_tasks: BackgroundTa
 @app.get("/status/{extension_id}")
 async def get_status(extension_id: str):
     """Get analysis status for an extension"""
+    extension_id = extension_id.strip().lower()
     if extension_id not in analysis_jobs:
         return {"status": "not_found", "message": "No analysis found for this extension"}
-    return analysis_jobs[extension_id]
+    out = dict(analysis_jobs[extension_id])
+    out["extension_id"] = extension_id
+    out["report_url"] = f"/report/{extension_id}"
+    return out
 
 
 @app.post("/cancel/{extension_id}")
@@ -180,7 +184,7 @@ async def get_report(extension_id: str):
     if not validate_extension_id(extension_id):
         raise HTTPException(status_code=400, detail="Invalid extension ID")
 
-    report_path = REPORTS_DIR / f"{extension_id}_threat_intel_report.html"
+    report_path = REPORTS_DIR / f"{extension_id}_threat_analysis_report.html"
 
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Report not found. Run analysis first.")
@@ -190,19 +194,22 @@ async def get_report(extension_id: str):
 
 @app.get("/api/recent")
 async def get_recent_scans():
-    """Get list of recent scans"""
+    """Get list of recent extension scans (last 5 only). Uses threat_analysis_report.html."""
     if not REPORTS_DIR.exists():
         return {"scans": []}
 
     reports = []
-    for report in REPORTS_DIR.glob("*_threat_intel_report.html"):
-        ext_id = report.stem.replace("_threat_intel_report", "")
+    for report in REPORTS_DIR.glob("*_threat_analysis_report.html"):
+        ext_id = report.stem.replace("_threat_analysis_report", "")
         reports.append({
             "extension_id": ext_id,
-            "report_url": f"/report/{ext_id}"
+            "report_url": f"/report/{ext_id}",
+            "mtime": report.stat().st_mtime
         })
-
-    return {"scans": reports[-10:]}  # Last 10
+    reports.sort(key=lambda x: x["mtime"], reverse=True)
+    for r in reports:
+        r.pop("mtime", None)
+    return {"scans": reports[:5]}
 
 
 if __name__ == "__main__":

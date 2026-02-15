@@ -76,17 +76,15 @@ class ChromeExtensionAnalyzer:
         self.run_dynamic = False
         self.dynamic_timeout = 30
     
-    def analyze_extension(self, extension_id, browser=BrowserType.CHROME, progress_callback=None):
+    def analyze_extension(self, extension_id, browser=BrowserType.CHROME, progress_callback=None, local_extension_path=None):
         """
-        Complete analysis pipeline with professional threat analysis
+        Complete analysis pipeline with professional threat analysis.
 
         Args:
-            extension_id (str): Browser extension ID
+            extension_id (str): Browser extension ID (or path when local_extension_path is used)
             browser (BrowserType): Browser store (CHROME or EDGE)
             progress_callback: Optional callable(percent, step_name, detail) for progress reporting
-
-        Returns:
-            dict: Comprehensive analysis results
+            local_extension_path (str|Path|None): If set, analyze this unpacked directory; extension_id is then the path.
         """
         def _progress(pct, name, detail=""):
             if progress_callback:
@@ -97,70 +95,78 @@ class ChromeExtensionAnalyzer:
         print(f"[SCAN] {browser_name} EXTENSION SECURITY ANALYZER")
         print("    Professional Threat Analysis Edition with VirusTotal")
         print("=" * 80)
-        print(f"\n[+] Target Extension ID: {extension_id}")
-        print(f"[+] Extension Store: {browser_name}\n")
 
-        # Step 0: Fetch Store Metadata
-        _progress(5, "Store metadata", "Fetching extension info from Chrome Web Store...")
-        store_name = "Edge Add-ons" if browser == BrowserType.EDGE else "Chrome Web Store"
-        print(f"[STORE] STEP 0: Fetching {store_name} metadata...")
-        print("-" * 80)
-
-        if browser == BrowserType.EDGE:
-            # For Edge, use edge-specific metadata fetcher
-            store_metadata = self._fetch_edge_metadata(extension_id)
+        if local_extension_path:
+            extension_dir = Path(local_extension_path).resolve()
+            if not extension_dir.is_dir() or not (extension_dir / 'manifest.json').exists():
+                print(f"\n[[X]] Not a valid unpacked extension directory (missing manifest.json): {extension_dir}")
+                return None
+            extension_id = extension_dir.name
+            print(f"\n[+] Local extension directory: {extension_dir}")
+            print(f"[+] Report identifier: {extension_id}\n")
+            manifest = self.unpacker.read_manifest(extension_dir)
+            if not manifest:
+                print("\n[[X]] Failed to read manifest.json")
+                return None
+            store_metadata = {
+                'available': False,
+                'name': manifest.get('name', 'Local Extension'),
+                'error': 'Local analysis (no store metadata)'
+            }
+            _progress(20, "Local extension", "Using provided directory.")
         else:
-            store_metadata = self.store_metadata.fetch_metadata(extension_id)
+            print(f"\n[+] Target Extension ID: {extension_id}")
+            print(f"[+] Extension Store: {browser_name}\n")
 
-        if store_metadata.get('available'):
-            print(f"[+] Extension: {store_metadata.get('name', 'Unknown')}")
-            print(f"    Author: {store_metadata.get('author', 'Unknown')} {'(verified)' if store_metadata.get('author_verified') else '(unverified)'}")
-            print(f"    Users: {store_metadata.get('user_count_text', 'Unknown')}")
-            print(f"    Rating: {store_metadata.get('rating', 'N/A')}")
-            print(f"    Last Updated: {store_metadata.get('last_updated_text', 'Unknown')}")
+            # Step 0: Fetch Store Metadata
+            _progress(5, "Store metadata", "Fetching extension info from Chrome Web Store...")
+            store_name = "Edge Add-ons" if browser == BrowserType.EDGE else "Chrome Web Store"
+            print(f"[STORE] STEP 0: Fetching {store_name} metadata...")
+            print("-" * 80)
 
-            # Check for store warnings (policy violations)
-            if store_metadata.get('has_chrome_warning') or store_metadata.get('has_warning'):
-                warning = store_metadata.get('chrome_warning') or store_metadata.get('warning')
-                print(f"\n[!] STORE WARNING: {warning}")
-                print(f"    Note: This is a policy violation, not necessarily malware")
+            if browser == BrowserType.EDGE:
+                store_metadata = self._fetch_edge_metadata(extension_id)
+            else:
+                store_metadata = self.store_metadata.fetch_metadata(extension_id)
 
-            # Check risk signals
-            risk_signals = store_metadata.get('risk_signals', {})
-            if risk_signals.get('low_adoption'):
-                print(f"[i] Low adoption: <100 users (increased risk)")
-            if risk_signals.get('no_privacy_policy'):
-                print(f"[i] No privacy policy found")
-        else:
-            print(f"[!] Could not fetch store metadata: {store_metadata.get('error', 'Unknown error')}")
-            print(f"    Continuing with analysis...")
+            if store_metadata.get('available'):
+                print(f"[+] Extension: {store_metadata.get('name', 'Unknown')}")
+                print(f"    Author: {store_metadata.get('author', 'Unknown')} {'(verified)' if store_metadata.get('author_verified') else '(unverified)'}")
+                print(f"    Users: {store_metadata.get('user_count_text', 'Unknown')}")
+                print(f"    Rating: {store_metadata.get('rating', 'N/A')}")
+                print(f"    Last Updated: {store_metadata.get('last_updated_text', 'Unknown')}")
+                if store_metadata.get('has_chrome_warning') or store_metadata.get('has_warning'):
+                    warning = store_metadata.get('chrome_warning') or store_metadata.get('warning')
+                    print(f"\n[!] STORE WARNING: {warning}")
+                risk_signals = store_metadata.get('risk_signals', {})
+                if risk_signals.get('low_adoption'):
+                    print(f"[i] Low adoption: <100 users (increased risk)")
+                if risk_signals.get('no_privacy_policy'):
+                    print(f"[i] No privacy policy found")
+            else:
+                print(f"[!] Could not fetch store metadata: {store_metadata.get('error', 'Unknown error')}")
+                print(f"    Continuing with analysis...")
 
-        # Step 1: Download
-        _progress(12, "Download", f"Downloading {browser_name} extension...")
-        print(f"[DOWNLOAD] STEP 1: Downloading {browser_name} extension...")
-        print("-" * 80)
-        crx_path = self.downloader.download_extension(extension_id, browser=browser)
-        
-        if not crx_path:
-            print("\n[[X]] Download failed. Extension may not exist or be unavailable.")
-            return None
-        
-        # Step 2: Unpack
-        _progress(18, "Unpack", "Extracting extension files...")
-        print("\n[UNPACK] STEP 2: Unpacking extension...")
-        print("-" * 80)
-        extension_dir = self.unpacker.unpack(crx_path)
-        
-        if not extension_dir:
-            print("\n[[X]] Unpacking failed.")
-            return None
-        
-        # Read manifest
-        manifest = self.unpacker.read_manifest(extension_dir)
-
-        if not manifest:
-            print("\n[[X]] Failed to read manifest.json")
-            return None
+            # Step 1: Download
+            _progress(12, "Download", f"Downloading {browser_name} extension...")
+            print(f"[DOWNLOAD] STEP 1: Downloading {browser_name} extension...")
+            print("-" * 80)
+            crx_path = self.downloader.download_extension(extension_id, browser=browser)
+            if not crx_path:
+                print("\n[[X]] Download failed. Extension may not exist or be unavailable.")
+                return None
+            # Step 2: Unpack
+            _progress(18, "Unpack", "Extracting extension files...")
+            print("\n[UNPACK] STEP 2: Unpacking extension...")
+            print("-" * 80)
+            extension_dir = self.unpacker.unpack(crx_path)
+            if not extension_dir:
+                print("\n[[X]] Unpacking failed.")
+                return None
+            manifest = self.unpacker.read_manifest(extension_dir)
+            if not manifest:
+                print("\n[[X]] Failed to read manifest.json")
+                return None
 
         # Step 2.5: Host Permissions Analysis
         _progress(22, "Permissions", "Analyzing host permissions...")
@@ -250,6 +256,40 @@ class ChromeExtensionAnalyzer:
 
         # Update risk score based on VT results
         results = self.analyzer.update_risk_with_virustotal(results, vt_results)
+
+        # Step 5b: VirusTotal File Hash Check
+        file_hashes = results.get('file_hashes', [])
+        if file_hashes and not getattr(self, 'skip_vt', False):
+            print(f"\n[VT] Checking {len(file_hashes)} file hash(es) against VirusTotal...")
+            vt_file_results = self.vt_checker.check_multiple_file_hashes(file_hashes)
+            results['virustotal_file_results'] = vt_file_results
+
+            # If any file hash is MALICIOUS → critical risk floor (8.0) + add finding
+            for vt_fr in vt_file_results:
+                if vt_fr.get('threat_level') == 'MALICIOUS':
+                    det = vt_fr.get('stats', {}).get('malicious', 0)
+                    fname = vt_fr.get('filename', vt_fr.get('hash', '?')[:16])
+                    print(f"\n[!!!] CRITICAL: File hash match on VT — {fname} ({det} detections)")
+
+                    # Add as critical malicious pattern
+                    results.setdefault('malicious_patterns', []).append({
+                        'name': f'VirusTotal file hash match: {fname}',
+                        'severity': 'critical',
+                        'description': (
+                            f"SHA-256 hash of {fname} is flagged by {det} VirusTotal vendor(s) as malicious. "
+                            f"This is definitive proof of known malware."
+                        ),
+                        'technique': 'Known malware (VT file hash)',
+                        'file': fname,
+                        'vt_url': vt_fr.get('vt_url', ''),
+                    })
+
+                    # Enforce critical risk floor
+                    if results.get('risk_score', 0) < 8.0:
+                        results['risk_score'] = 8.0
+                        results['risk_level'] = self.analyzer.get_risk_level(8.0)
+        else:
+            results['virustotal_file_results'] = []
 
         print(f"\n[+] Updated Risk Score (with VirusTotal): {results['risk_score']:.1f}/10 ({results['risk_level']})")
 
@@ -575,10 +615,11 @@ class ChromeExtensionAnalyzer:
         print("-" * 80)
 
         # Save JSON report (detailed data)
-        json_report = self.analyzer.save_report(results)
+        output_dir = getattr(self, 'report_output_dir', None) or 'reports'
+        json_report = self.analyzer.save_report(results, output_dir=output_dir)
 
         # Generate professional HTML report
-        html_report = self.reporter.save_professional_report(results)
+        html_report = self.reporter.save_professional_report(results, output_dir=output_dir)
 
         # Print Summary
         self._print_analysis_summary(results)
@@ -936,23 +977,70 @@ class ChromeExtensionAnalyzer:
             print("[i] Skipping VirusTotal checks (--skip-vt enabled)")
             return []
 
-        # Extract unique domains from external scripts
-        external_scripts = results.get('external_scripts', [])
+        import re
+        from urllib.parse import urlparse
+
+        # ── Domain validation (rejects JS identifiers like Permissions.PermissionsAdded) ──
+        _CAMEL_RE = re.compile(r'[A-Z][a-z]+[A-Z]')
+        _VALID_TLDS = {
+            'com', 'org', 'net', 'io', 'ai', 'co', 'dev', 'app', 'xyz', 'info',
+            'biz', 'me', 'tv', 'cc', 'us', 'uk', 'de', 'fr', 'ru', 'cn', 'jp',
+            'br', 'in', 'au', 'ca', 'es', 'it', 'nl', 'se', 'no', 'fi', 'pl',
+            'cz', 'at', 'ch', 'be', 'pt', 'dk', 'ie', 'nz', 'kr', 'sg', 'hk',
+            'tw', 'id', 'th', 'ph', 'my', 'vn', 'mx', 'ar', 'cl', 'za', 'ng',
+            'ke', 'ua', 'ro', 'hu', 'bg', 'hr', 'sk', 'si', 'lt', 'lv', 'ee',
+            'top', 'icu', 'email', 'cloud', 'site', 'online', 'store', 'tech',
+            'live', 'today', 'space', 'fun', 'website', 'shop', 'pro', 'click',
+            'link', 'club', 'pw', 'tk', 'ml', 'ga', 'cf', 'gq', 'ws', 'buzz',
+            'one', 'gg', 'ly', 'to', 'sh', 'eu', 'edu', 'gov', 'mil', 'int',
+        }
+
+        def _is_real_domain(d):
+            """Reject JS identifiers / API names and keep only real domains."""
+            if not d or len(d) > 253:
+                return False
+            if _CAMEL_RE.search(d):
+                return False
+            parts = d.split('.')
+            if len(parts) < 2:
+                return False
+            if parts[-1].lower() not in _VALID_TLDS:
+                return False
+            return True
+
         unique_domains = set()
-        
-        for script in external_scripts:
+
+        # Extract from external scripts
+        for script in results.get('external_scripts', []):
             url = script.get('url', '')
-            from urllib.parse import urlparse
             try:
                 parsed = urlparse(url)
-                domain = parsed.netloc
-                if domain:
-                    unique_domains.add(domain)
-            except:
+                if parsed.netloc and _is_real_domain(parsed.netloc):
+                    unique_domains.add(parsed.netloc)
+            except Exception:
                 pass
+        # Extract from AST exfil/network_calls
+        ast_results = results.get('ast_results', {})
+        for exfil in ast_results.get('data_exfiltration', []) + ast_results.get('network_calls', []):
+            dest = exfil.get('destination') or exfil.get('url') or ''
+            if dest and not dest.startswith('<'):
+                try:
+                    if '://' in dest:
+                        h = urlparse(dest).netloc
+                    else:
+                        h = dest.split('/')[0].split(':')[0]
+                    if _is_real_domain(h):
+                        unique_domains.add(h)
+                except Exception:
+                    pass
+        # Extract from whole-file URL/host extraction and manifest URLs
+        for item in results.get('urls_in_code', []) + results.get('manifest_urls', []):
+            host = item.get('host') or ''
+            if host and _is_real_domain(host):
+                unique_domains.add(host)
         
         if not unique_domains:
-            print("[i] No external domains to check")
+            print("[i] No domains to check")
             return []
         
         # Check domains with VirusTotal
@@ -1528,6 +1616,12 @@ Features:
         help='Analyze a VSCode extension from VS Marketplace (identifier: publisher.name)'
     )
 
+    parser.add_argument(
+        '--local',
+        action='store_true',
+        help='Analyze a local unpacked extension directory (first argument = path to folder with manifest.json)'
+    )
+
     return parser.parse_args(argv)
 
 
@@ -1567,15 +1661,15 @@ def main():
             sys.exit(4)
         return
 
-    # ── Chrome / Edge mode ──
-    # Validate extension ID format
-    if len(args.extension_id) != 32:
-        print(f"[!] Warning: Extension ID should be 32 characters long.")
-        print(f"[!] Provided ID: {args.extension_id} ({len(args.extension_id)} characters)")
-        response = input("[?] Continue anyway? (y/n): ")
-        if response.lower() != 'y':
-            print("[[X]] Aborted.")
-            sys.exit(1)
+    # ── Chrome / Edge mode (or local unpacked directory) ──
+    if not getattr(args, 'local', False):
+        if len(args.extension_id) != 32:
+            print(f"[!] Warning: Extension ID should be 32 characters long.")
+            print(f"[!] Provided ID: {args.extension_id} ({len(args.extension_id)} characters)")
+            response = input("[?] Continue anyway? (y/n): ")
+            if response.lower() != 'y':
+                print("[[X]] Aborted.")
+                sys.exit(1)
 
     # Determine browser type
     browser = BrowserType.CHROME
@@ -1609,8 +1703,22 @@ def main():
     analyzer.skip_osint = getattr(args, 'skip_osint', False) or fast_mode
     analyzer.run_dynamic = getattr(args, 'dynamic', False) and not fast_mode
     analyzer.dynamic_timeout = getattr(args, 'dynamic_timeout', 30)
+    # Default reports dir: use repo root so reports are findable when run from src/
+    out_dir = getattr(args, 'output_dir', 'reports')
+    if out_dir == 'reports' and __file__:
+        repo_reports = Path(__file__).resolve().parent.parent / 'reports'
+        analyzer.report_output_dir = str(repo_reports)
+    else:
+        analyzer.report_output_dir = str(Path(out_dir).resolve())
 
-    results = analyzer.analyze_extension(args.extension_id, browser=browser)
+    if getattr(args, 'local', False):
+        results = analyzer.analyze_extension(
+            args.extension_id,
+            browser=browser,
+            local_extension_path=args.extension_id
+        )
+    else:
+        results = analyzer.analyze_extension(args.extension_id, browser=browser)
 
     if results:
         # Exit code based on risk level

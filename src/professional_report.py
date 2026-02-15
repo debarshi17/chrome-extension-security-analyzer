@@ -920,6 +920,15 @@ class ProfessionalReportGenerator:
         
         html += '<div class="content">'
 
+        # Scan coverage (transparency when full scan failed on some files)
+        scan_coverage = results.get('scan_coverage')
+        if scan_coverage and isinstance(scan_coverage, dict):
+            html += self._generate_scan_coverage_section(scan_coverage)
+
+        # Lab / Sinkhole context (localhost-only C2 — no real internet exfil)
+        if results.get('sinkhole_or_lab_c2'):
+            html += self._generate_lab_sinkhole_section(results)
+
         # VSCode-specific sections
         if results.get('extension_type') == 'vscode':
             html += self._generate_vscode_overview_section(results)
@@ -1273,6 +1282,56 @@ class ProfessionalReportGenerator:
 """
         return html
     
+    def _generate_scan_coverage_section(self, scan_coverage):
+        """Scan coverage: total JS files, fully scanned count, files with parse/scan errors (fallback used)."""
+        total = scan_coverage.get('total_js_files') or 0
+        if total == 0:
+            return ''
+        full = scan_coverage.get('files_fully_scanned', 0)
+        errors = scan_coverage.get('files_with_scan_errors', 0)
+        pct = round(100 * full / total) if total else 0
+        color = '#22c55e' if errors == 0 else '#eab308' if pct >= 70 else '#f97316'
+        html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📋</div>
+                <div class="section-title">Scan Coverage</div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap;">
+                <div style="font-size: 28px; font-weight: 700; color: {color};">{pct}%</div>
+                <div style="color: var(--text-secondary); font-size: 14px;">
+                    {full} of {total} JS files fully scanned.
+                    {f'{errors} file(s) used fallback pattern-only scan (parse/slice errors).' if errors else 'All files parsed successfully.'}
+                </div>
+            </div>
+        </div>
+"""
+        return html
+
+    def _generate_lab_sinkhole_section(self, results):
+        """Sinkhole C2: destinations are localhost only — used to validate rule engine, not real C2."""
+        context = results.get('lab_malware_context', 'All C2/exfil destinations are sinkhole domains (localhost). Used only to validate the rule engine.')
+        tc = results.get('threat_classification', {})
+        env_summary = tc.get('environment_summary', context)
+        html = f"""
+        <div class="section" style="border: 2px solid #3b82f6;">
+            <div class="section-header">
+                <div class="section-icon">🧪</div>
+                <div class="section-title">Sinkhole C2 — Rule Engine Validation</div>
+            </div>
+            <div style="padding: 16px; background: rgba(59, 130, 246, 0.1); border-radius: 8px;">
+                <p style="margin: 0 0 12px 0; font-size: 14px; color: var(--text-primary);">
+                    {html_module.escape(env_summary)}
+                </p>
+                <p style="margin: 0; font-size: 13px; color: var(--text-secondary);">
+                    The extension uses <strong>sinkhole domains</strong> (e.g. 127.0.0.1) as C2/exfil targets — the same patterns as real malware, but no data leaves the host. 
+                    This is used to <strong>check that the detection rules work correctly</strong>; these are not real C2 domains.
+                </p>
+            </div>
+        </div>
+"""
+        return html
+
     def _generate_risk_breakdown_section(self, results):
         """Generate V2 risk score breakdown with component bars"""
         breakdown = results.get('risk_breakdown', {})
@@ -1938,6 +1997,61 @@ class ProfessionalReportGenerator:
             </div>
 """
         
+        # File Hash IOCs (SHA-256) — VT file-hash lookup results
+        file_hashes = results.get('file_hashes', [])
+        vt_file_results = {r.get('hash', ''): r for r in results.get('virustotal_file_results', [])}
+        if file_hashes:
+            html += """
+            <div class="ioc-category">
+                <div class="ioc-category-title">🔐 File Hash IOCs (SHA-256)</div>
+                <div class="ioc-list">
+"""
+            for fh in file_hashes:
+                sha = fh.get('sha256', '')
+                fname = html_module.escape(fh.get('filename', ''))
+                vt = vt_file_results.get(sha)
+
+                if vt and vt.get('threat_level') == 'MALICIOUS':
+                    det = vt.get('stats', {}).get('malicious', 0)
+                    vt_url = html_module.escape(vt.get('vt_url', ''))
+                    html += f"""
+                    <div class="ioc-item" style="border-left: 3px solid #dc2626; padding-left: 10px;">
+                        <strong style="color:#dc2626;">⚠️ {fname}</strong>
+                        <span style="background:#dc2626;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">
+                            MALICIOUS — {det} vendor(s)
+                        </span>
+                        <br><code style="font-size:11px;word-break:break-all;">{sha}</code>
+                        {'<br><a href="' + vt_url + '" target="_blank" style="color:#60a5fa;font-size:12px;">View on VirusTotal ↗</a>' if vt_url else ''}
+                    </div>
+"""
+                elif vt and vt.get('threat_level') == 'SUSPICIOUS':
+                    det_s = vt.get('stats', {}).get('suspicious', 0)
+                    vt_url = html_module.escape(vt.get('vt_url', ''))
+                    html += f"""
+                    <div class="ioc-item" style="border-left: 3px solid #f59e0b; padding-left: 10px;">
+                        <strong style="color:#f59e0b;">⚠ {fname}</strong>
+                        <span style="background:#f59e0b;color:#000;padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">
+                            SUSPICIOUS — {det_s} flag(s)
+                        </span>
+                        <br><code style="font-size:11px;word-break:break-all;">{sha}</code>
+                        {'<br><a href="' + vt_url + '" target="_blank" style="color:#60a5fa;font-size:12px;">View on VirusTotal ↗</a>' if vt_url else ''}
+                    </div>
+"""
+                else:
+                    html += f"""
+                    <div class="ioc-item">
+                        <strong>{fname}</strong>
+                        <span style="background:#374151;color:#9ca3af;padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">
+                            {'CLEAN' if (vt and vt.get('known')) else 'NOT IN VT'}
+                        </span>
+                        <br><code style="font-size:11px;word-break:break-all;">{sha}</code>
+                    </div>
+"""
+            html += """
+                </div>
+            </div>
+"""
+
         # Search Hijacking URLs
         settings = results.get('settings_overrides', {})
         if settings.get('search_hijacking'):
@@ -1950,38 +2064,103 @@ class ProfessionalReportGenerator:
                 </div>
             </div>
 """
-        
-        # Malicious Domains from VirusTotal
-        vt_malicious = [r for r in results.get('virustotal_results', []) if r.get('threat_level') == 'MALICIOUS']
-        if vt_malicious:
-            html += """
-            <div class="ioc-category">
-                <div class="ioc-category-title">🌐 Malicious Domains (VirusTotal Confirmed)</div>
-                <div class="ioc-list">
-"""
-            for domain in vt_malicious[:10]:
-                html += f'<div class="ioc-item">{domain["domain"]}</div>'
-            html += """
-                </div>
-            </div>
-"""
-        
-        # Data Exfiltration Destinations (FROM AST ANALYSIS)
+
+        # ── Top 5 Domains (unified, sorted by malicious + community score) ──
+        # Build a unified domain map: domain → {malicious, community_neg, threat_level, vt_url, sources}
+        domain_map = {}  # domain_str → info dict
+
+        def _ensure(d, source_tag):
+            d = d.strip().lower()
+            if not d or d.startswith('<'):
+                return
+            if d not in domain_map:
+                domain_map[d] = {'malicious': 0, 'community_neg': 0, 'threat_level': 'UNKNOWN', 'vt_url': '', 'sources': set()}
+            domain_map[d]['sources'].add(source_tag)
+
+        # VT domain results (richest data)
+        for vt in results.get('virustotal_results', []):
+            d = (vt.get('domain') or '').strip().lower()
+            if not d:
+                continue
+            _ensure(d, 'VT')
+            stats = vt.get('stats', {})
+            votes = vt.get('votes', {})
+            domain_map[d]['malicious'] = stats.get('malicious', 0)
+            domain_map[d]['community_neg'] = votes.get('malicious', 0)
+            domain_map[d]['threat_level'] = vt.get('threat_level', 'UNKNOWN')
+            domain_map[d]['vt_url'] = vt.get('url', '')
+
+        # AST exfil destinations
         ast_results = results.get('ast_results', {})
-        exfil_destinations = set()
         for exfil in ast_results.get('data_exfiltration', []):
-            dest = exfil.get('destination', 'Unknown')
-            if dest != 'Unknown' and not dest.startswith('<'):
-                exfil_destinations.add(dest)
-        
-        if exfil_destinations:
+            dest = exfil.get('destination', '')
+            if dest and not dest.startswith('<'):
+                # Strip scheme to get host
+                if '://' in dest:
+                    try:
+                        from urllib.parse import urlparse
+                        dest = urlparse(dest).netloc
+                    except Exception:
+                        dest = dest.split('://')[1].split('/')[0].split(':')[0]
+                _ensure(dest, 'Exfil')
+
+        # Code / manifest URLs
+        for item in results.get('urls_in_code', []):
+            h = item.get('host')
+            if h:
+                _ensure(h, 'Code')
+        for item in results.get('manifest_urls', []):
+            h = item.get('host')
+            if h:
+                _ensure(h, 'Manifest')
+
+        # Sort: primary = malicious vendor count (desc), secondary = community negative votes (desc)
+        sorted_domains = sorted(
+            domain_map.items(),
+            key=lambda kv: (kv[1]['malicious'], kv[1]['community_neg']),
+            reverse=True
+        )
+        top5 = sorted_domains[:5]
+
+        if top5:
             html += """
             <div class="ioc-category">
-                <div class="ioc-category-title">🚨 Data Exfiltration Destinations</div>
+                <div class="ioc-category-title">🌐 Top Domains (sorted by threat score)</div>
                 <div class="ioc-list">
 """
-            for dest in sorted(exfil_destinations):
-                html += f'<div class="ioc-item">{dest}</div>'
+            for domain, info in top5:
+                escaped = html_module.escape(domain)
+                mal = info['malicious']
+                comm = info['community_neg']
+                tl = info['threat_level']
+                vt_url = html_module.escape(info.get('vt_url', ''))
+                sources = ', '.join(sorted(info['sources']))
+
+                # Badge color
+                if tl == 'MALICIOUS':
+                    badge_bg, badge_fg = '#dc2626', '#fff'
+                    border = '#dc2626'
+                elif tl == 'SUSPICIOUS':
+                    badge_bg, badge_fg = '#f59e0b', '#000'
+                    border = '#f59e0b'
+                else:
+                    badge_bg, badge_fg = '#374151', '#9ca3af'
+                    border = '#4b5563'
+
+                html += f"""
+                    <div class="ioc-item" style="border-left: 3px solid {border}; padding-left: 10px; margin-bottom: 8px;">
+                        <strong style="color:{badge_fg if tl == 'MALICIOUS' else '#e5e7eb'};">{escaped}</strong>
+                        <span style="background:{badge_bg};color:{badge_fg};padding:2px 8px;border-radius:4px;font-size:11px;margin-left:8px;">
+                            {tl}
+                        </span>
+                        <br>
+                        <span style="font-size:12px;color:#9ca3af;">
+                            🛡️ {mal} malicious vendor(s) &nbsp;|&nbsp; 👥 {comm} negative community vote(s)
+                            &nbsp;|&nbsp; Source: {html_module.escape(sources)}
+                        </span>
+                        {'<br><a href="' + vt_url + '" target="_blank" style="color:#60a5fa;font-size:12px;">View on VirusTotal ↗</a>' if vt_url else ''}
+                    </div>
+"""
             html += """
                 </div>
             </div>
@@ -2599,10 +2778,12 @@ class ProfessionalReportGenerator:
                 sev_icon = {'critical': '🔴', 'high': '🚨', 'medium': '⚠️', 'low': 'ℹ️'}.get(sev, '⚠️')
                 sev_css = 'high' if sev in ('critical', 'high') else sev
 
+                dup_count = threat.get('duplicate_count', 1)
+                dup_badge = f' <span style="background:#334155;color:#94a3b8;padding:2px 6px;border-radius:10px;font-size:11px;margin-left:6px;">{dup_count}x</span>' if dup_count > 1 else ''
                 html += f"""
             <div class="threat-item {sev_css}">
                 <div class="threat-header">
-                    <div class="threat-name">{sev_icon} {html_module.escape(threat.get('name', 'Unknown Threat'))}</div>
+                    <div class="threat-name">{sev_icon} {html_module.escape(threat.get('name', 'Unknown Threat'))}{dup_badge}</div>
                     <div class="threat-severity {sev_css}">{sev}</div>
                 </div>
                 <div class="threat-description">{html_module.escape(threat.get('description', 'No description available'))}</div>
@@ -2887,6 +3068,13 @@ class ProfessionalReportGenerator:
                 return "A MutationObserver monitors DOM changes with focus on login/password elements. This watches for dynamically loaded login forms to capture credentials as soon as they appear."
             else:
                 return "A MutationObserver watches for DOM changes. This can be used to detect when sensitive forms are added to the page and immediately begin capturing their data."
+
+        # Fetch with credentials: 'include' (cookie/session replay) - e.g. inject script network-helper.js
+        if 'credentials include' in name or 'cookie replay' in name:
+            file_path = (threat.get('file') or '').lower()
+            if 'network-helper' in file_path or 'inject' in file_path or 'content' in file_path:
+                return "Inject or content script uses fetch with credentials: 'include' to replay network requests with the victim's cookies. This can hijack sessions or exfiltrate data as the user without their knowledge."
+            return "Fetch is called with credentials: 'include', so requests are sent with the user's cookies. In content/inject scripts this replays the victim's requests and can be used for session hijacking or data theft."
 
         # Cookie/session theft context
         if 'cookie' in name:

@@ -6,23 +6,13 @@ Based on DarkSpectre/ZoomStealer campaign analysis
 
 import json
 import re
-import time
+import hashlib
 from pathlib import Path
 from collections import defaultdict
+from urllib.parse import urlparse
 import math
 from ast_analyzer import JavaScriptASTAnalyzer
 
-# #region agent log
-import os
-_DEBUG_LOG_PATH = r'c:\Users\user2\Documents\GitHub\chrome-extension-security-analyzer\.cursor\debug.log'
-def _static_log(msg, data=None, hypothesis_id=None):
-    try:
-        os.makedirs(os.path.dirname(_DEBUG_LOG_PATH), exist_ok=True)
-        with open(_DEBUG_LOG_PATH, 'a', encoding='utf-8') as _f:
-            _f.write(json.dumps({'message': msg, 'data': data or {}, 'timestamp': round(time.time() * 1000), 'location': 'static_analyzer.py', 'hypothesisId': hypothesis_id}, ensure_ascii=False) + '\n')
-    except Exception:
-        pass
-# #endregion
 
 
 class EnhancedStaticAnalyzer:
@@ -163,6 +153,14 @@ class EnhancedStaticAnalyzer:
                 'description': 'POST with credentials to a variable URL - review if URL is first-party service or external. Legitimate for Gmail/Outlook extensions calling their own APIs.',
                 'technique': 'Authenticated request'
             },
+            # Cookie/session replay - fetch with credentials: 'include' (any method). In inject scripts (e.g. network-helper.js) replays victim requests with their cookies.
+            {
+                'name': 'Fetch with credentials include (cookie replay)',
+                'pattern': r'fetch\s*\([\s\S]{0,150}?credentials\s*:\s*["\']include["\']',
+                'severity': 'high',
+                'description': "Replays network requests with the victim's cookies (credentials: 'include'). In inject or content scripts (e.g. network-helper.js) this can hijack sessions or exfiltrate as the user.",
+                'technique': 'Credential theft'
+            },
             {
                 'name': 'XMLHttpRequest (Informational)',
                 'pattern': r'new\s+XMLHttpRequest\s*\(',
@@ -207,9 +205,9 @@ class EnhancedStaticAnalyzer:
             },
             {
                 'name': 'WebAssembly (Potential Crypto Mining)',
-                'pattern': r'WebAssembly\.',
+                'pattern': r'WebAssembly\.(?:instantiate|compile|compileStreaming|instantiateStreaming)\s*\([\s\S]{0,200}(?:worker|hash|mine|coin|pool|stratum)',
                 'severity': 'medium',
-                'description': 'Uses WebAssembly (can be used for crypto mining)',
+                'description': 'Uses WebAssembly with crypto-mining indicators (hash, mine, worker pool)',
                 'technique': 'Resource abuse'
             },
             {
@@ -657,9 +655,9 @@ class EnhancedStaticAnalyzer:
             },
             {
                 'name': 'CSRF Token Extraction',
-                'pattern': r'csrf|_token|authenticity_token|__RequestVerificationToken|xsrf',
+                'pattern': r'(?:querySelector|getElementById|getElementsByName|getAttribute)\s*\([^)]*(?:csrf|_token|authenticity_token|__RequestVerificationToken|xsrf)[\s\S]{0,80}(?:\.value|\.content|\.textContent)',
                 'severity': 'high',
-                'description': 'Accesses CSRF tokens - can be used to forge authenticated requests on behalf of the user',
+                'description': 'Reads CSRF token from DOM - can forge authenticated requests on behalf of the user',
                 'technique': 'CSRF token theft'
             },
             {
@@ -1059,9 +1057,9 @@ class EnhancedStaticAnalyzer:
             },
             {
                 'name': 'Headless Browser Detection',
-                'pattern': r'navigator\.webdriver|window\.chrome\.runtime|phantom|selenium|puppeteer',
+                'pattern': r'navigator\.webdriver|(?:window\.)?(?:_phantom|__nightmare|callPhantom)|selenium|puppeteer',
                 'severity': 'high',
-                'description': 'Detects automated browsers - ANTI-ANALYSIS to evade security scanners',
+                'description': 'Detects automated browsers (webdriver/phantom/selenium/puppeteer) - ANTI-ANALYSIS to evade security scanners',
                 'technique': 'Automation detection'
             },
             {
@@ -1217,9 +1215,9 @@ class EnhancedStaticAnalyzer:
             },
             {
                 'name': 'Unicode Escape Obfuscation',
-                'pattern': r'\\u[0-9a-fA-F]{4}\\u[0-9a-fA-F]{4}\\u[0-9a-fA-F]{4}',
+                'pattern': r'(?:\\u[0-9a-fA-F]{4}){6,}',
                 'severity': 'medium',
-                'description': 'Heavy use of Unicode escape sequences to hide code',
+                'description': 'Heavy use of Unicode escape sequences (6+ consecutive) to hide code — excludes short i18n strings',
                 'technique': 'String obfuscation'
             },
             {
@@ -1485,50 +1483,66 @@ class EnhancedStaticAnalyzer:
         return refs
 
     def _prioritize_js_files_for_security(self, extension_dir, manifest, max_files=300):
-        """Return list of JS Paths to scan: manifest-referenced first, then by relevance/size.
-        Ensures background, content scripts, and app logic are never dropped when capping.
+        """Return only manifest-referenced JS files + a small set of high-value
+        filenames that attackers commonly use (inject scripts, helpers, loaders).
+
+        Why: Scanning hundreds of bundled library files through AST is slow and
+        produces false-positive domains/patterns.  The files that actually carry
+        malicious payloads are always referenced in manifest.json (background,
+        content_scripts, service_worker) or have recognizable names like
+        inject.js, helper.js, loader.js.
+
+        This keeps AST + pattern scanning fast and focused on what matters.
         """
         extension_dir = Path(extension_dir)
-        all_js = list(extension_dir.rglob('*.js'))
-        js_files = [p for p in all_js if 'node_modules' not in p.parts and 'bower_components' not in p.parts]
 
+        # 1. Start with manifest-referenced JS (the must-scan set)
         manifest_refs = self._get_manifest_referenced_js(extension_dir, manifest)
+        seen = set()
+        result = []
 
-        def rel_path(p):
-            return str(p.relative_to(extension_dir)).replace('\\', '/')
+        def _add(p):
+            resolved = p.resolve()
+            if resolved not in seen and p.is_file():
+                seen.add(resolved)
+                result.append(p)
 
-        def is_manifest_referenced(p):
-            r = rel_path(p)
-            if r in manifest_refs:
-                return True
-            for ref in manifest_refs:
-                if r.endswith(ref) or ref.endswith(r) or r.replace('/', '\\') == ref.replace('/', '\\'):
-                    return True
-            return False
+        for ref in manifest_refs:
+            candidate = extension_dir / ref
+            if candidate.is_file():
+                _add(candidate)
 
-        def relevance_score(p):
-            """Lower = more important for security review."""
-            r = rel_path(p).lower()
-            if is_manifest_referenced(p):
-                return 0
-            if 'content' in r or 'inject' in r:
-                return 1
-            if 'background' in r or 'service' in r or 'worker' in r:
-                return 2
-            if 'popup' in r or 'options' in r or 'script' in r:
-                return 3
-            if any(x in r for x in ('auth', 'login', 'register', 'api', 'config')):
-                return 4
-            return 5
+        # 2. Also grab high-value filenames that attackers use but may not be
+        #    directly listed in manifest (e.g. injected by background.js at runtime)
+        _HIGH_VALUE_NAMES = {
+            'inject.js', 'injector.js', 'inject-script.js',
+            'network-helper.js', 'helper.js', 'loader.js',
+            'payload.js', 'stealer.js', 'keylogger.js',
+            'c2.js', 'beacon.js', 'exfil.js',
+            'find-password.js', 'password.js',
+            'manifest.js',
+        }
+        _HIGH_VALUE_KEYWORDS = {'inject', 'helper', 'payload', 'steal', 'exfil', 'keylog', 'c2', 'beacon'}
 
-        # Sort: manifest first, then by relevance, then by size (smaller = more likely app code)
-        prioritized = sorted(
-            js_files,
-            key=lambda p: (relevance_score(p), p.stat().st_size)
-        )
-        if len(prioritized) > max_files:
-            return prioritized[:max_files]
-        return prioritized
+        all_js = list(extension_dir.rglob('*.js'))
+        for p in all_js:
+            if 'node_modules' in p.parts or 'bower_components' in p.parts:
+                continue
+            name_lower = p.name.lower()
+            if name_lower in _HIGH_VALUE_NAMES:
+                _add(p)
+                continue
+            # Check if filename contains any high-value keyword
+            stem = p.stem.lower()
+            if any(kw in stem for kw in _HIGH_VALUE_KEYWORDS):
+                _add(p)
+
+        total_js = len([p for p in all_js if 'node_modules' not in p.parts and 'bower_components' not in p.parts])
+        skipped = total_js - len(result)
+        if skipped > 0:
+            print(f"[+] Focused scan: {len(result)} manifest-referenced + high-value files (skipped {skipped} library/bundled files)")
+
+        return result[:max_files]
 
     # Known third-party libraries that should have findings downgraded
     KNOWN_LIBRARIES = [
@@ -1786,9 +1800,24 @@ class EnhancedStaticAnalyzer:
             'virustotal_results': [],
             'ast_results': {},
             'risk_score': 0,
-            'risk_level': 'UNKNOWN'
+            'risk_level': 'UNKNOWN',
+            'urls_in_code': [],
+            'manifest_urls': [],
         }
-        
+        # Extract manifest URLs (privacy policy, homepage, update) for C2/domain detection
+        for key in ('privacy_policy_url', 'homepage_url', 'update_url'):
+            u = manifest.get(key)
+            if u and isinstance(u, str) and (u.startswith('http://') or u.startswith('https://')):
+                try:
+                    host = urlparse(u).netloc.split(':')[0]
+                    if host:
+                        results['manifest_urls'].append({'url': u, 'host': host})
+                except Exception:
+                    pass
+
+        # Compute file hashes (for VT file-hash lookup)
+        results['file_hashes'] = self._compute_file_hashes(extension_dir, manifest)
+
         # Analyze permissions with details
         results['permissions'] = self.analyze_permissions(manifest)
         
@@ -1805,15 +1834,8 @@ class EnhancedStaticAnalyzer:
             print(f"[+] Scanning {len(js_files)} security-relevant JS files (manifest + app logic; {all_js_count - len(js_files)} excluded)")
         else:
             print(f"[+] Scanning {len(js_files)} JavaScript files...")
-        # #region agent log
-        _static_log('static analyze_extension js_files', {'count': len(js_files), 'large': [{'path': str(p.relative_to(extension_dir)), 'size_kb': p.stat().st_size // 1024} for p in js_files if p.stat().st_size > 512 * 1024]}, 'H5')
-        # #endregion
-        print(f"[+] Scanning {len(js_files)} JavaScript files...")
         # Run AST analysis (CRITICAL - shows exact POST destinations)
         print(f"[+] Running AST analysis...")
-        # #region agent log
-        _t_ast = time.perf_counter()
-        # #endregion
         try:
             from tqdm import tqdm
             _use_progress = True
@@ -1827,9 +1849,6 @@ class EnhancedStaticAnalyzer:
             results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir, progress_callback=lambda: _pbar.update(1), js_file_list=js_files)
         else:
             results['ast_results'] = self.ast_analyzer.analyze_directory(extension_dir, js_file_list=js_files)
-        # #region agent log
-        _static_log('static AST analyze_directory returned', {'elapsed_ms': round((time.perf_counter() - _t_ast) * 1000)}, 'H1')
-        # #endregion
         
         # Merge AST findings into malicious_patterns
         for exfil in results['ast_results'].get('data_exfiltration', []):
@@ -1848,47 +1867,88 @@ class EnhancedStaticAnalyzer:
             })
         
         # OPTIMIZED: Read files once and cache them for all analysis passes
+        results['scan_coverage'] = {'total_js_files': len(js_files), 'files_with_scan_errors': 0, 'files_fully_scanned': 0}
         for idx, js_file in enumerate(js_files):
             try:
-                # #region agent log
-                _rel = str(js_file.relative_to(extension_dir))
-                _sz = js_file.stat().st_size
-                _static_log('static scan file start', {'index': idx, 'path': _rel, 'size_kb': _sz // 1024}, 'H3')
-                _t_scan = time.perf_counter()
-                # #endregion
-                # Use cached file reader to avoid multiple reads
                 code = self._read_file_cached(js_file)
                 if code is None:
                     continue
 
                 relative_path = str(js_file.relative_to(extension_dir))
 
-                # Check for malicious patterns (uses pre-compiled regex)
-                patterns_found = self.scan_code(code, relative_path)
+                used_fallback = False
+                try:
+                    patterns_found = self.scan_code(code, relative_path)
+                except Exception as scan_err:
+                    results['scan_coverage']['files_with_scan_errors'] += 1
+                    used_fallback = True
+                    print(f"[!] Error scanning {js_file.name}: {scan_err} (using fallback pattern scan)")
+                    patterns_found = self._scan_code_minimal(code, relative_path)
+                    results['malicious_patterns'].append({
+                        'name': 'Obfuscated or minified bundle (full context scan failed)',
+                        'severity': 'medium',
+                        'description': 'Parser failed on this file; only pattern-based scan was run. Minified/obfuscated bundles often break AST and slicing.',
+                        'technique': 'Obfuscation / Parse failure',
+                        'file': relative_path,
+                        'line': 1,
+                        'context': '(fallback scan used)',
+                        'fallback_scan': True
+                    })
+                if not used_fallback:
+                    results['scan_coverage']['files_fully_scanned'] += 1
                 results['malicious_patterns'].extend(patterns_found)
 
-                # Check for external scripts
-                external = self.find_external_scripts(code, relative_path)
-                results['external_scripts'].extend(external)
+                try:
+                    external = self.find_external_scripts(code, relative_path)
+                    results['external_scripts'].extend(external)
+                except Exception:
+                    pass
 
-                # Check for obfuscation
-                obfuscation = self.detect_obfuscation(code)
-                if obfuscation['is_obfuscated']:
-                    results['obfuscation_indicators'][relative_path] = obfuscation
-                # #region agent log
-                _static_log('static scan file done', {'path': _rel, 'elapsed_ms': round((time.perf_counter() - _t_scan) * 1000)}, 'H4')
-                # #endregion
+                try:
+                    obfuscation = self.detect_obfuscation(code)
+                    if obfuscation['is_obfuscated']:
+                        results['obfuscation_indicators'][relative_path] = obfuscation
+                except Exception:
+                    pass
+                # Extract all URLs and host-like strings from code (closes C2 detection gap, e.g. mcp-browser.qubecare.ai)
+                try:
+                    extracted = self._extract_urls_and_hosts_from_code(code, relative_path)
+                    results['urls_in_code'].extend(extracted)
+                except Exception:
+                    pass
                 if _use_progress:
                     _pbar.update(1)
             except Exception as e:
+                results['scan_coverage']['files_with_scan_errors'] += 1
                 print(f"[!] Error scanning {js_file.name}: {e}")
                 if _use_progress:
-                    _pbar.update(1)  # count failed file so percentage stays correct
+                    _pbar.update(1)
 
+        if results['scan_coverage']['files_with_scan_errors']:
+            print(f"[i] Scan coverage: {results['scan_coverage']['files_fully_scanned']}/{results['scan_coverage']['total_js_files']} files fully scanned, {results['scan_coverage']['files_with_scan_errors']} with fallback/errors")
         if _use_progress:
             _pbar.close()
+
+        # Deduplicate and suppress noisy informational patterns
+        raw_count = len(results['malicious_patterns'])
+        results['malicious_patterns'] = self._deduplicate_and_suppress_findings(results['malicious_patterns'])
+        deduped_count = len(results['malicious_patterns'])
+        if raw_count != deduped_count:
+            print(f"[+] Findings: {raw_count} raw -> {deduped_count} after deduplication & noise suppression")
+
         # Clear file cache after analysis to free memory
         self._clear_file_cache()
+
+        # Sinkhole/localhost detection and infrastructure signals (C2, exfil endpoints, beaconing)
+        infra_signals = self._detect_sinkhole_and_infra_signals(results)
+        results['infra_signals'] = infra_signals
+        if infra_signals.get('sinkhole_or_lab_c2'):
+            results['sinkhole_or_lab_c2'] = True
+            results['lab_malware_context'] = (
+                'All C2/exfil destinations are sinkhole domains (localhost / 127.0.0.1). '
+                'Used only to validate that the rule engine detects malicious behavior — not real C2; no data leaves the host.'
+            )
+            print(f"[i] SINKHOLE: {results['lab_malware_context'][:85]}...")
         
         # Check for known campaign membership
         results['campaign_attribution'] = self.detect_campaign_membership(
@@ -2355,7 +2415,32 @@ class EnhancedStaticAnalyzer:
             if marker in url:
                 found_params.append(marker.rstrip('='))
         return found_params
-    
+
+    @staticmethod
+    def _safe_slice(text, start, end):
+        """Slice text with start/end; coerce to int to avoid 'slice indices must be integers' on minified/bundled code."""
+        try:
+            start = int(start) if start is not None else 0
+            end = int(end) if end is not None else len(text)
+            start = max(0, min(start, len(text)))
+            end = max(0, min(end, len(text)))
+            return text[start:end]
+        except (TypeError, ValueError):
+            return text
+
+    @staticmethod
+    def _safe_int(val, default=0, min_val=None, max_val=None):
+        """Coerce to int for use as slice/index; avoid float/None from parsers or regex."""
+        try:
+            i = int(val)
+            if min_val is not None:
+                i = max(min_val, i)
+            if max_val is not None:
+                i = min(max_val, i)
+            return i
+        except (TypeError, ValueError):
+            return default
+
     def _is_in_comment(self, code, position):
         """Check if a position in code is inside a comment
 
@@ -2363,9 +2448,9 @@ class EnhancedStaticAnalyzer:
         - After // on the same line (single-line comment)
         - Inside /* ... */ (multi-line comment)
         """
-        # Find line start
+        position = self._safe_int(position, 0, 0, len(code))
         line_start = code.rfind('\n', 0, position) + 1
-        line_content = code[line_start:position]
+        line_content = self._safe_slice(code, line_start, position)
 
         # Check if preceded by // on same line (but not part of URL like https://)
         if '//' in line_content:
@@ -2394,18 +2479,18 @@ class EnhancedStaticAnalyzer:
         workload linear in file size.
         """
         for anchor_match in anchor_re.finditer(code):
-            window_end = min(anchor_match.end() + max_gap, len(code))
-            window = code[anchor_match.end():window_end]
+            a_end = EnhancedStaticAnalyzer._safe_int(anchor_match.end(), 0, 0, len(code))
+            window_end = min(a_end + max_gap, len(code))
+            window = EnhancedStaticAnalyzer._safe_slice(code, a_end, window_end)
             tail_match = tail_re.search(window)
             if tail_match:
-                # Build a synthetic match-like object so callers can use
-                # .start(), .end(), .group(0) the same way.
-                full_start = anchor_match.start()
-                full_end = anchor_match.end() + tail_match.end()
+                full_start = EnhancedStaticAnalyzer._safe_int(anchor_match.start(), 0, 0, len(code))
+                full_end = min(len(code), a_end + EnhancedStaticAnalyzer._safe_int(tail_match.end(), 0, 0, len(window)))
+                snippet = EnhancedStaticAnalyzer._safe_slice(code, full_start, full_end)
                 yield type('_M', (), {
                     'start': lambda s=full_start: s,
                     'end':   lambda e=full_end: e,
-                    'group': lambda n=0, t=code[full_start:full_end]: t if n == 0 else '',
+                    'group': lambda n=0, t=snippet: t if n == 0 else '',
                 })()
 
     def scan_code(self, code, file_path):
@@ -2433,15 +2518,16 @@ class EnhancedStaticAnalyzer:
                 matches = pattern_def['compiled'].finditer(code)
 
             for match in matches:
-                # Skip matches inside comments to reduce false positives
-                if self._is_in_comment(code, match.start()):
+                start_pos = self._safe_int(match.start(), 0, 0, len(code))
+                if self._is_in_comment(code, start_pos):
                     continue
 
-                line_num = code[:match.start()].count('\n') + 1
+                line_num = self._safe_int(self._safe_slice(code, 0, start_pos).count('\n') + 1, 1, 1, len(lines))
 
                 # Get 3 lines before and 3 lines after (7 lines total context)
-                context_start = max(0, line_num - 4)  # 3 lines before (0-indexed adjustment)
-                context_end = min(len(lines), line_num + 3)  # 3 lines after
+                context_start = self._safe_int(line_num - 4, 0, 0, len(lines))
+                context_end = self._safe_int(line_num + 3, 0, 0, len(lines))
+                context_end = min(context_end, len(lines))
 
                 # Build context with line numbers for display
                 context_lines = []
@@ -2496,7 +2582,108 @@ class EnhancedStaticAnalyzer:
                 })
 
         return found_patterns
-    
+
+    # ── Patterns that are purely informational / too noisy to keep at volume ──
+    _INFORMATIONAL_NOISE = frozenset({
+        'localStorage Access',
+        'Prototype Reference (Informational)',
+        'Tab URL Access (Informational)',
+        'XMLHttpRequest (Informational)',
+    })
+
+    # ── Patterns that are contextual — only meaningful when paired with other signals.
+    #    We keep at most MAX_PER_NAME occurrences per extension to prevent report flooding.
+    _CONTEXTUAL_CAP_PATTERNS = frozenset({
+        'Input Value Direct Access',
+        'Fetch POST Request (Review Destination)',
+        'Unicode Escape Obfuscation',
+        'Comment-Based Code Hiding',
+        'Headless Browser Detection',
+        'Background Worker',
+        'Random ID Generation for Tracking',
+        'Autofill Attribute Manipulation',
+    })
+    _MAX_PER_NAME = 3  # keep at most 3 instances of capped patterns
+
+    def _deduplicate_and_suppress_findings(self, patterns):
+        """Deduplicate and suppress noisy findings.
+
+        1. **Suppress informational noise** — patterns that are standard web APIs
+           (localStorage, __proto__, tab.url, XHR) are dropped entirely; their signal
+           is already captured by the behavioral engine if combined with real threats.
+        2. **Deduplicate exact repeats** — same (pattern_name, file) pair is kept once;
+           a ``duplicate_count`` field records how many were collapsed.
+        3. **Cap contextual patterns** — patterns that are only meaningful with context
+           are capped at _MAX_PER_NAME per extension to stop report flooding.
+        """
+        # Step 1: Remove pure informational noise
+        filtered = [p for p in patterns if p.get('name') not in self._INFORMATIONAL_NOISE]
+
+        # Step 2: Deduplicate by (name, file)
+        seen = {}  # (name, file) -> index in output list
+        deduped = []
+        for p in filtered:
+            key = (p.get('name', ''), p.get('file', ''))
+            if key in seen:
+                idx = seen[key]
+                deduped[idx]['duplicate_count'] = deduped[idx].get('duplicate_count', 1) + 1
+            else:
+                seen[key] = len(deduped)
+                p['duplicate_count'] = 1
+                deduped.append(p)
+
+        # Step 3: Cap contextual / volume patterns
+        name_counts = {}
+        capped = []
+        for p in deduped:
+            name = p.get('name', '')
+            if name in self._CONTEXTUAL_CAP_PATTERNS:
+                cnt = name_counts.get(name, 0)
+                if cnt >= self._MAX_PER_NAME:
+                    # Still count for severity but don't add to list
+                    # Update the last kept occurrence's count
+                    for prev in reversed(capped):
+                        if prev.get('name') == name:
+                            prev['duplicate_count'] = prev.get('duplicate_count', 1) + p.get('duplicate_count', 1)
+                            break
+                    continue
+                name_counts[name] = cnt + 1
+            capped.append(p)
+
+        return capped
+
+    def _scan_code_minimal(self, code, file_path):
+        """Fallback when full scan_code fails: pattern match only, no context. Avoids silent skip of critical files."""
+        found = []
+        for pattern_def in self._compiled_patterns:
+            try:
+                if pattern_def.get('two_pass') and pattern_def.get('tail'):
+                    matches = self._safe_pattern_finditer(
+                        code, pattern_def['compiled'],
+                        pattern_def['tail'], pattern_def['max_gap'])
+                else:
+                    matches = pattern_def['compiled'].finditer(code)
+                for match in matches:
+                    start_pos = self._safe_int(match.start(), 0, 0, len(code))
+                    line_num = self._safe_int(
+                        self._safe_slice(code, 0, start_pos).count('\n') + 1, 1, 1, 2**31 - 1)
+                    found.append({
+                        'name': pattern_def['name'],
+                        'severity': pattern_def['severity'],
+                        'description': pattern_def['description'],
+                        'technique': pattern_def.get('technique', 'Unknown'),
+                        'file': file_path,
+                        'line': line_num,
+                        'context': '(fallback scan - context unavailable)',
+                        'context_with_lines': '',
+                        'matched_text': (match.group(0) or '')[:100],
+                        'is_library_code': False,
+                        'fallback_scan': True
+                    })
+            except Exception:
+                continue
+        return found
+
     def find_external_scripts(self, code, file_path):
         """Find external script URLs"""
         external = []
@@ -2507,11 +2694,12 @@ class EnhancedStaticAnalyzer:
             url = match.group(0)
             if any(cdn in url for cdn in ['googleapis.com', 'cdnjs.cloudflare.com', 'unpkg.com']):
                 continue
-            
+            start_pos = self._safe_int(match.start(), 0, 0, len(code))
+            line_num = self._safe_slice(code, 0, start_pos).count('\n') + 1
             external.append({
                 'url': url,
                 'file': file_path,
-                'line': code[:match.start()].count('\n') + 1
+                'line': self._safe_int(line_num, 1, 1, 2**31 - 1)
             })
         
         return external
@@ -2567,7 +2755,325 @@ class EnhancedStaticAnalyzer:
                 p_x = c / n
                 entropy += -p_x * math.log2(p_x)
         return entropy
-    
+
+    # Hosts that indicate sinkhole (localhost only — used for rule-engine validation, not real C2)
+    _LOCALHOST_PATTERNS = re.compile(
+        r'127\.0\.0\.1|::1|\blocalhost\b|\[::1\]',
+        re.I
+    )
+
+    def _normalize_host(self, url_or_host):
+        """Extract host from URL or return as-is if already a host. Returns None if not parseable."""
+        if not url_or_host or not isinstance(url_or_host, str):
+            return None
+        s = url_or_host.strip()
+        if not s:
+            return None
+        if '://' in s:
+            try:
+                return urlparse(s).hostname
+            except Exception:
+                return None
+        if '/' in s:
+            return s.split('/')[0].split(':')[0]
+        return s.split(':')[0] if ':' in s else s
+
+    def _is_localhost_host(self, host):
+        """True if host is 127.0.0.1, ::1, or localhost."""
+        if not host:
+            return False
+        return bool(self._LOCALHOST_PATTERNS.search(host))
+
+    # Valid public TLDs / ccTLDs (most common). If last label isn't here, reject.
+    _VALID_TLDS = frozenset({
+        'com', 'org', 'net', 'io', 'ai', 'co', 'dev', 'app', 'xyz', 'info',
+        'biz', 'me', 'tv', 'cc', 'us', 'uk', 'de', 'fr', 'ru', 'cn', 'jp',
+        'br', 'in', 'au', 'ca', 'es', 'it', 'nl', 'se', 'no', 'fi', 'pl',
+        'cz', 'at', 'ch', 'be', 'pt', 'dk', 'ie', 'nz', 'kr', 'sg', 'hk',
+        'tw', 'id', 'th', 'ph', 'my', 'vn', 'mx', 'ar', 'cl', 'za', 'ng',
+        'ke', 'ua', 'ro', 'hu', 'bg', 'hr', 'sk', 'si', 'lt', 'lv', 'ee',
+        'top', 'icu', 'email', 'cloud', 'site', 'online', 'store', 'tech',
+        'live', 'today', 'space', 'fun', 'website', 'shop', 'pro', 'click',
+        'link', 'club', 'pw', 'tk', 'ml', 'ga', 'cf', 'gq', 'ws', 'buzz',
+        'one', 'gg', 'ly', 'to', 'sh', 'eu', 'edu', 'gov', 'mil', 'int',
+    })
+
+    # CamelCase pattern: two or more uppercase-starting segments = JS identifier, not a domain
+    _CAMEL_CASE_RE = re.compile(r'[A-Z][a-z]+[A-Z]')
+
+    # Known browser/extension API namespaces that are NOT domains
+    _API_NAMESPACE_PREFIXES = (
+        'chrome.', 'browser.', 'window.', 'document.', 'console.',
+        'Permissions.', 'InternalAnalytics.', 'BlockElementModule.',
+        'AntiMaleWare.', 'AdBlock.', 'ABP.', 'FilterStorage.',
+        'Math.', 'JSON.', 'Object.', 'Array.', 'Promise.',
+        'Error.', 'RegExp.', 'Date.', 'Number.', 'String.',
+        'Map.', 'Set.', 'WeakMap.', 'WeakSet.', 'Symbol.',
+        'Reflect.', 'Proxy.', 'Intl.', 'WebAssembly.',
+    )
+
+    def _is_plausible_host(self, host):
+        """True if string looks like a real network hostname (not a JS identifier
+        or API namespace like 'Permissions.PermissionsAdded').
+
+        Rejects:
+          - Code fragments with < > + spaces
+          - CamelCase identifiers (e.g. InternalAnalytics.TrackEvent)
+          - Known browser API namespaces (chrome.*, Permissions.*, etc.)
+          - Strings whose last label is not a valid public TLD
+        """
+        if not host or not isinstance(host, str):
+            return False
+        h = host.strip()
+        if not h or len(h) > 253:
+            return False
+        # Reject code fragments
+        if '<' in h or '>' in h or '+' in h or ' ' in h or '=' in h or '(' in h:
+            return False
+        # Localhost is always valid
+        if self._LOCALHOST_PATTERNS.search(h):
+            return True
+        # Reject known API namespaces
+        for prefix in self._API_NAMESPACE_PREFIXES:
+            if h.startswith(prefix):
+                return False
+        # Reject CamelCase identifiers (e.g. BlockElementModule.Options)
+        if self._CAMEL_CASE_RE.search(h):
+            return False
+        # Must match hostname charset
+        if not re.match(r'^[a-zA-Z0-9]([a-zA-Z0-9.\-]*[a-zA-Z0-9])?$', h):
+            return False
+        # Must have at least one dot (single-label strings are not domains)
+        parts = h.split('.')
+        if len(parts) < 2:
+            return False
+        # Last label must be a known TLD
+        tld = parts[-1].lower()
+        if tld not in self._VALID_TLDS:
+            return False
+        return True
+
+    # Regex to find URLs and quoted FQDNs in code (closes gap for C2 domains like mcp-browser.qubecare.ai)
+    _URL_IN_CODE_PATTERN = re.compile(
+        r'https?://([^\s\'"<>)\]\},;]+)|wss?://([^\s\'"<>)\]\},;]+)',
+        re.IGNORECASE
+    )
+    _QUOTED_FQDN_PATTERN = re.compile(
+        r'["\']([a-zA-Z0-9](?:[-a-zA-Z0-9.]*[a-zA-Z0-9])?\.[a-zA-Z]{2,})["\']'
+    )
+
+    # ── File hash computation ─────────────────────────────────────
+
+    def _compute_file_hashes(self, extension_dir, manifest):
+        """
+        Compute SHA-256 hashes of the files that actually carry malicious
+        payloads and are most likely to already exist in VT's database.
+
+        Only the high-value targets:
+          - manifest.json  — unique extension fingerprint
+          - manifest.js    — dynamic config loader (if present)
+          - Background scripts / service worker — C2, beaconing, exfil logic
+          - Content scripts — injected into victim pages, credential theft
+
+        Popup JS and web-accessible resources are excluded: they are almost
+        never the primary payload and waste VT API calls.
+
+        Returns list of dicts: [{sha256, filename, file_path}, ...]
+        """
+        hashes = []
+        seen_paths = set()
+
+        def _hash_file(fpath):
+            """Read file and return SHA-256 hex digest, or None on error."""
+            try:
+                data = fpath.read_bytes()
+                return hashlib.sha256(data).hexdigest()
+            except Exception as e:
+                print(f"[!] Hash error for {fpath.name}: {e}")
+                return None
+
+        def _add(fpath, label=None):
+            resolved = fpath.resolve()
+            if resolved in seen_paths or not fpath.is_file():
+                return
+            seen_paths.add(resolved)
+            digest = _hash_file(fpath)
+            if digest:
+                hashes.append({
+                    'sha256': digest,
+                    'filename': label or fpath.name,
+                    'file_path': str(fpath),
+                })
+
+        # 1. manifest.json — always; extension fingerprint
+        _add(extension_dir / 'manifest.json')
+
+        # 2. manifest.js — dynamic config loader (if present)
+        manifest_js = extension_dir / 'manifest.js'
+        if manifest_js.is_file():
+            _add(manifest_js)
+
+        # 3. Background: MV3 service worker
+        bg = manifest.get('background', {})
+        sw = bg.get('service_worker')
+        if sw:
+            _add(extension_dir / sw, f'background/{sw}')
+
+        # 4. Background: MV2 scripts / page
+        for script in bg.get('scripts', []):
+            _add(extension_dir / script, f'background/{script}')
+        bg_page = bg.get('page')
+        if bg_page:
+            _add(extension_dir / bg_page, f'background/{bg_page}')
+
+        # 5. Content scripts — page-injected payloads
+        for cs_block in manifest.get('content_scripts', []):
+            for js in cs_block.get('js', []):
+                _add(extension_dir / js, f'content_script/{js}')
+
+        if hashes:
+            print(f"[+] Computed SHA-256 hashes for {len(hashes)} key file(s)")
+
+        return hashes
+
+    def _extract_urls_and_hosts_from_code(self, code, file_path):
+        """Extract all URL and host-like literals from code for C2/domain detection. Returns list of {url, host, file, line}."""
+        out = []
+        if not code or not isinstance(code, str):
+            return out
+        lines = code.split('\n')
+        for idx, line in enumerate(lines, 1):
+            # Full URLs (http/https/ws/wss)
+            for m in self._URL_IN_CODE_PATTERN.finditer(line):
+                g1, g2 = m.group(1), m.group(2)
+                host = (g1 or g2 or '').strip()
+                if host:
+                    host = host.split('/')[0].split(':')[0]
+                if host and self._is_plausible_host(host):
+                    full = m.group(0)
+                    out.append({'url': full, 'host': host, 'file': file_path, 'line': idx})
+            # Quoted FQDN-only strings (e.g. "mcp-browser.qubecare.ai")
+            for m in self._QUOTED_FQDN_PATTERN.finditer(line):
+                host = (m.group(1) or '').strip()
+                if host and self._is_plausible_host(host):
+                    out.append({'url': host, 'host': host, 'file': file_path, 'line': idx})
+        return out
+
+    def _detect_sinkhole_and_infra_signals(self, results):
+        """
+        Detect (1) if all C2/exfil destinations are sinkhole domains (localhost only —
+        used to validate the rule engine, not real C2) and (2) infrastructure signals
+        for risk: exfil endpoint count, WebSocket C2, beaconing.
+        Returns dict with sinkhole_or_lab_c2, exfil_endpoint_count, has_websocket_c2, has_beaconing.
+        """
+        hosts = set()
+        endpoints_seen = set()
+        has_websocket_c2 = False
+        has_beaconing = False
+
+        # From AST data_exfiltration and network_calls
+        ast_results = results.get('ast_results', {})
+        for exfil in ast_results.get('data_exfiltration', []):
+            dest = exfil.get('destination', '') or ''
+            if dest:
+                endpoints_seen.add(dest)
+            host = self._normalize_host(dest)
+            if host and self._is_plausible_host(host):
+                hosts.add(host)
+        for call in ast_results.get('network_calls', []):
+            url = call.get('url', '') or call.get('destination', '') or ''
+            if url:
+                endpoints_seen.add(url)
+            host = self._normalize_host(url)
+            if host and self._is_plausible_host(host):
+                hosts.add(host)
+            if (call.get('type') or '').lower() == 'websocket':
+                has_websocket_c2 = True
+
+        # From malicious_patterns (destination, context)
+        for p in results.get('malicious_patterns', []):
+            dest = p.get('destination', '') or ''
+            ctx = p.get('context', '') or p.get('evidence', '') or ''
+            if dest:
+                endpoints_seen.add(dest)
+                h = self._normalize_host(dest)
+                if h and self._is_plausible_host(h):
+                    hosts.add(h)
+            if 'WebSocket' in (p.get('technique') or ''):
+                has_websocket_c2 = True
+            # Scan context for URLs/hosts
+            for part in (dest, ctx):
+                if not part:
+                    continue
+                if self._LOCALHOST_PATTERNS.search(part):
+                    hosts.add('127.0.0.1')
+                match = re.search(r'https?://([^\s\'"<>/]+)', part)
+                if match:
+                    h = match.group(1).split(':')[0]
+                    if self._is_plausible_host(h):
+                        hosts.add(h)
+                match = re.search(r'ws[s]?://([^\s\'"<>/]+)', part, re.I)
+                if match:
+                    h = match.group(1).split(':')[0]
+                    if self._is_plausible_host(h):
+                        hosts.add(h)
+                    has_websocket_c2 = True
+            # Beaconing: setInterval + fetch
+            if 'setInterval' in ctx and ('fetch' in ctx or 'ping' in ctx or 'beacon' in ctx.lower()):
+                has_beaconing = True
+
+        # From whole-file URL/host extraction (closes gap for C2 like mcp-browser.qubecare.ai)
+        for item in results.get('urls_in_code', []):
+            url = item.get('url') or ''
+            host = item.get('host') or ''
+            if url:
+                endpoints_seen.add(url)
+            if host and self._is_plausible_host(host):
+                hosts.add(host)
+        # From manifest URLs (privacy_policy_url, homepage_url, update_url)
+        for item in results.get('manifest_urls', []):
+            url = item.get('url') or ''
+            host = item.get('host') or ''
+            if url:
+                endpoints_seen.add(url)
+            if host and self._is_plausible_host(host):
+                hosts.add(host)
+
+        # From permissions (host_permissions / all)
+        perm_all = results.get('permissions', {}).get('all', [])
+        for perm in perm_all:
+            if isinstance(perm, str) and ('://' in perm or '127.0.0.1' in perm or 'localhost' in perm):
+                host = self._normalize_host(perm)
+                if host and self._is_plausible_host(host):
+                    hosts.add(host)
+                elif isinstance(perm, str) and self._LOCALHOST_PATTERNS.search(perm):
+                    hosts.add('127.0.0.1')
+
+        # Sinkhole: we have at least one network destination and all are localhost
+        only_localhost = bool(hosts) and all(self._is_localhost_host(h) for h in hosts)
+        # Fallback: if we have exfil/C2 and localhost appears in permissions or code, treat as lab
+        has_localhost_in_perms = any(
+            isinstance(p, str) and self._LOCALHOST_PATTERNS.search(p)
+            for p in perm_all
+        )
+        has_localhost_in_code = any(
+            self._LOCALHOST_PATTERNS.search((p.get('context') or '') + (p.get('evidence') or '') + (p.get('destination') or ''))
+            for p in results.get('malicious_patterns', [])
+        )
+        if (endpoints_seen or has_websocket_c2) and (has_localhost_in_perms or has_localhost_in_code):
+            hosts.add('127.0.0.1')
+            only_localhost = True
+        else:
+            only_localhost = bool(hosts) and all(self._is_localhost_host(h) for h in hosts)
+
+        return {
+            'sinkhole_or_lab_c2': only_localhost,
+            'exfil_endpoint_count': len(endpoints_seen),
+            'has_websocket_c2': has_websocket_c2,
+            'has_beaconing': has_beaconing,
+            'all_hosts_localhost': only_localhost,
+        }
+
     def detect_campaign_membership(self, manifest, settings_overrides, domain_analysis):
         """Check if extension matches known malicious campaigns"""
         
@@ -2654,10 +3160,11 @@ class EnhancedStaticAnalyzer:
         med_count = sum(1 for p in patterns if p.get('severity') == 'medium')
 
         code_raw = crit_count * 0.5 + high_count * 0.2 + med_count * 0.05
-        # Density bonus for large finding sets
-        if len(patterns) > 20:
+        # Density bonus: count significant findings only (medium+)
+        significant = sum(1 for p in patterns if p.get('severity') in ('critical', 'high', 'medium'))
+        if significant > 20:
             code_raw += 0.5
-        elif len(patterns) > 10:
+        elif significant > 10:
             code_raw += 0.25
 
         code_component = min(code_raw, 2.5)
@@ -2686,6 +3193,18 @@ class EnhancedStaticAnalyzer:
                 infra += 1.0
         elif settings.get('homepage_hijacking') or settings.get('startup_hijacking'):
             infra += 0.8
+
+        # C2 / exfil / beacon signals (infrastructure-heavy malware)
+        infra_signals = results.get('infra_signals', {})
+        exfil_count = infra_signals.get('exfil_endpoint_count', 0)
+        if exfil_count >= 4:
+            infra += 1.0
+        elif exfil_count >= 2:
+            infra += 0.5
+        if infra_signals.get('has_websocket_c2'):
+            infra += 0.5
+        if infra_signals.get('has_beaconing'):
+            infra += 0.3
 
         # Campaign attribution
         if results.get('campaign_attribution'):
@@ -2968,7 +3487,7 @@ class EnhancedStaticAnalyzer:
                 summary = (f'Behavioral patterns detected ({", ".join(all_archetypes[:2])}). '
                            f'Capabilities warrant investigation.')
 
-        return {
+        out = {
             'classification': classification,
             'primary_archetype': primary,
             'all_archetypes': all_archetypes,
@@ -2976,6 +3495,15 @@ class EnhancedStaticAnalyzer:
             'attack_types': list(attack_set),
             'correlation_count': len(correlations),
         }
+        # Sinkhole C2: destinations are localhost only — used to validate rule engine, not real exfil
+        if results.get('sinkhole_or_lab_c2'):
+            out['environment_classification'] = 'LAB_SIMULATION'
+            out['environment_summary'] = (
+                'C2/exfil endpoints are sinkhole domains (localhost). '
+                'Used to verify the rule engine works; not real C2 — no data is sent to the internet.'
+            )
+            out['summary'] = summary + ' ' + out['environment_summary']
+        return out
 
     def update_risk_with_virustotal(self, results, vt_results):
         """Update risk score based on VirusTotal results.

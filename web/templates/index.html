@@ -415,7 +415,7 @@
                     cancelBtn.style.display = 'none';
 
                     if (data.status === 'complete') {
-                        showComplete(data);
+                        showComplete(data, extensionId);
                         progressContainer.classList.remove('active');
                     } else if (data.status === 'cancelled') {
                         status.className = 'status error';
@@ -453,18 +453,20 @@
             }
         }
 
-        function showComplete(data) {
+        function showComplete(data, extensionId) {
             const status = document.getElementById('status');
             const btn = document.getElementById('analyzeBtn');
             document.getElementById('cancelBtn').style.display = 'none';
             const riskClass = getRiskClass(data.risk_level);
+            // Use the extension we just polled for so the link always points to this scan's report
+            const reportUrl = extensionId ? `/report/${extensionId}` : (data.report_url || '#');
             status.className = 'status success';
             status.innerHTML = `
                 ✅ Analysis complete!
                 <span class="risk-badge ${riskClass}">${data.risk_level}</span>
                 <span style="margin-left: 10px;">Score: ${data.risk_score}/10</span>
                 <br>
-                <a href="${data.report_url}" class="result-link" target="_blank">View Full Report</a>
+                <a href="${reportUrl}" class="result-link" target="_blank">View Full Report</a>
             `;
             btn.disabled = false;
             loadRecentScans();

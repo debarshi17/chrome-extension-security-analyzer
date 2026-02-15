@@ -69,6 +69,18 @@ class ThreatAttribution:
             'layerx', 'koi security', 'koi.ai'
         ]
 
+        # Canonical reference for DarkSpectre/ShadyPanda/ZoomStealer (Koi Research - primary source)
+        self.CANONICAL_DARKSPECTRE_URL = 'https://www.koi.ai/blog/darkspectre-unmasking-the-threat-actor-behind-7-8-million-infected-browsers'
+        self.CANONICAL_DARKSPECTRE_ARTICLE = {
+            'title': 'DarkSpectre: Unmasking the Threat Actor Behind 8.8 Million Infected Browsers',
+            'url': self.CANONICAL_DARKSPECTRE_URL,
+            'source': 'Koi Security'
+        }
+        # Benign lists that must not be shown as threat intel (e.g. awesome lists that list extension IDs for reference)
+        self.BENIGN_SOURCE_PATTERNS = [
+            'awesome-browserrelated', 'xiang0731/awesome', 'github.com/xiang0731',
+        ]
+
         # Known security research domains (trusted sources)
         self.trusted_sources = [
             'koi.ai', 'thehackernews.com', 'bleepingcomputer.com', 'securityweek.com',
@@ -92,6 +104,26 @@ class ThreatAttribution:
         except Exception as e:
             print(f"[!] Error loading malicious extensions database: {e}")
             return {'campaigns': {}, 'metadata': {}}
+
+    def _normalize_source_articles(self, source_articles, campaign_name):
+        """Filter out benign list URLs and ensure canonical Koi reference first for DarkSpectre/ShadyPanda/ZoomStealer."""
+        if not source_articles:
+            source_articles = []
+        campaign = (campaign_name or '').lower()
+        is_darkspectre = any(x in campaign for x in ('darkspectre', 'shadypanda', 'zoomstealer', 'ghostposter'))
+        filtered = []
+        for a in source_articles:
+            url = (a.get('url') or '').lower()
+            if any(b in url for b in self.BENIGN_SOURCE_PATTERNS):
+                continue
+            filtered.append(a)
+        if is_darkspectre:
+            # Prefer Koi as primary reference; avoid duplicate
+            koi_url = self.CANONICAL_DARKSPECTRE_URL.lower()
+            filtered = [self.CANONICAL_DARKSPECTRE_ARTICLE] + [
+                x for x in filtered if (x.get('url') or '').lower() != koi_url
+            ]
+        return filtered if filtered else source_articles
 
     def _load_attribution_cache(self):
         """Load attribution cache database - stores discovered attributions"""
@@ -798,13 +830,16 @@ class ThreatAttribution:
                 result['campaign_name'] = cached.get('campaign_name')
                 result['confidence'] = cached.get('confidence', 'HIGH')
                 result['keywords_found'] = cached.get('keywords_found', [])
-                result['source_articles'] = [
-                    {'title': title, 'url': url}
+                raw_articles = [
+                    {'title': title, 'url': url, 'source': None}
                     for title, url in zip(
                         cached.get('source_titles', []),
                         cached.get('source_urls', [])
                     )
                 ]
+                result['source_articles'] = self._normalize_source_articles(
+                    raw_articles, cached.get('campaign_name')
+                )
                 result['from_cache'] = True
                 result['cache_date'] = cached.get('discovered_date')
 
@@ -1005,7 +1040,9 @@ The ZoomStealer campaign is part of DarkSpectre's operations, employing 18 malic
 
                 # Update result based on web search findings
                 result['attribution_found'] = web_results['is_malicious']
-                result['source_articles'] = web_results.get('sources', [])
+                raw_sources = web_results.get('sources', [])
+                campaign = web_results.get('campaign_detected') or result.get('campaign_name')
+                result['source_articles'] = self._normalize_source_articles(raw_sources, campaign)
                 result['web_search_performed'] = True
                 result['web_mentions_found'] = True
                 result['keywords_found'] = web_results.get('keywords_found', [])

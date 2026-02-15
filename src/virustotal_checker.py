@@ -481,6 +481,148 @@ class VirusTotalChecker:
         return results
 
 
+    # ── File hash lookup ─────────────────────────────────────────────
+
+    def check_file_hash(self, sha256_hash, filename=None):
+        """
+        Look up a file SHA-256 hash on VirusTotal (GET /files/{hash}).
+        No file upload – only checks if VT already has a report for this hash.
+
+        Args:
+            sha256_hash: SHA-256 hex string
+            filename: Optional display name (e.g. 'background.js')
+
+        Returns:
+            dict with keys: available, hash, filename, threat_level, stats,
+                            malicious_vendors, vt_url
+        """
+        sha256_lower = sha256_hash.lower().strip()
+        label = filename or sha256_lower[:16]
+
+        # Cache check (reuse the domains bucket with a "file:" prefix)
+        cache_key = f"file:{sha256_lower}"
+        cached = self._get_cached_result(cache_key)
+        if cached:
+            return cached
+
+        if not self.api_key:
+            return {
+                'available': False,
+                'hash': sha256_lower,
+                'filename': filename,
+                'error': 'VirusTotal API key not configured',
+            }
+
+        try:
+            url = f"{self.base_url}/files/{sha256_lower}"
+            print(f"[VT] Checking file hash for {label}...")
+
+            response = self.session.get(url, timeout=30)
+            time.sleep(self.rate_limit_delay)
+
+            if response.status_code == 404:
+                result = {
+                    'available': True,
+                    'hash': sha256_lower,
+                    'filename': filename,
+                    'known': False,
+                    'threat_level': 'UNKNOWN',
+                    'message': 'File hash not found in VirusTotal database',
+                }
+                self._cache_result(cache_key, result)
+                return result
+
+            if response.status_code != 200:
+                return {
+                    'available': False,
+                    'hash': sha256_lower,
+                    'filename': filename,
+                    'error': f'VirusTotal API error: {response.status_code}',
+                }
+
+            data = response.json()
+            attrs = data.get('data', {}).get('attributes', {})
+            stats = attrs.get('last_analysis_stats', {})
+            malicious_count = stats.get('malicious', 0)
+            suspicious_count = stats.get('suspicious', 0)
+
+            # Vendor details
+            last_analysis = attrs.get('last_analysis_results', {})
+            malicious_vendors = []
+            for vendor, res in last_analysis.items():
+                if res.get('category') == 'malicious':
+                    malicious_vendors.append({
+                        'vendor': vendor,
+                        'result': res.get('result', 'malicious'),
+                    })
+
+            if malicious_count > 0:
+                threat_level = 'MALICIOUS'
+            elif suspicious_count > 3:
+                threat_level = 'SUSPICIOUS'
+            else:
+                threat_level = 'CLEAN'
+
+            result = {
+                'available': True,
+                'hash': sha256_lower,
+                'filename': filename,
+                'known': True,
+                'threat_level': threat_level,
+                'stats': {
+                    'malicious': malicious_count,
+                    'suspicious': suspicious_count,
+                    'harmless': stats.get('harmless', 0),
+                    'undetected': stats.get('undetected', 0),
+                },
+                'malicious_vendors': malicious_vendors[:10],
+                'vt_url': f"https://www.virustotal.com/gui/file/{sha256_lower}",
+                'file_type': attrs.get('type_description', ''),
+                'file_name_vt': attrs.get('meaningful_name', ''),
+            }
+            self._cache_result(cache_key, result)
+            return result
+
+        except requests.exceptions.Timeout:
+            return {'available': False, 'hash': sha256_lower, 'filename': filename, 'error': 'VT API timeout'}
+        except Exception as e:
+            return {'available': False, 'hash': sha256_lower, 'filename': filename, 'error': f'Error: {str(e)}'}
+
+    def check_multiple_file_hashes(self, hashes, max_checks=10):
+        """
+        Check multiple file hashes against VirusTotal (respecting rate limits).
+
+        Args:
+            hashes: list of dicts with keys 'sha256' and optional 'filename'
+            max_checks: max API calls (default 10)
+
+        Returns:
+            list of result dicts from check_file_hash()
+        """
+        if not hashes:
+            return []
+
+        results = []
+        to_check = hashes[:max_checks]
+        print(f"\n[VT] Checking {len(to_check)} file hash(es) against VirusTotal...")
+
+        for i, entry in enumerate(to_check):
+            sha = entry.get('sha256', '')
+            fname = entry.get('filename', '')
+            print(f"[VT] File hash {i + 1}/{len(to_check)}: {fname or sha[:16]}")
+            result = self.check_file_hash(sha, filename=fname)
+            results.append(result)
+
+        malicious = sum(1 for r in results if r.get('threat_level') == 'MALICIOUS')
+        if malicious:
+            print(f"[VT] FILE HASH ALERT: {malicious} file(s) flagged as MALICIOUS!")
+        else:
+            print(f"[VT] File hash summary: {len(results)} checked, none flagged")
+
+        self._save_cache()
+        return results
+
+
 def test_virustotal():
     """Test VirusTotal checker"""
     

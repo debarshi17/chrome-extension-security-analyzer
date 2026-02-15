@@ -6,21 +6,8 @@ Resolves CONFIG variables to actual URLs
 import esprima
 import json
 import re
-import time
 from pathlib import Path
 from collections import defaultdict
-
-# #region agent log
-import os
-_DEBUG_LOG_PATH = r'c:\Users\user2\Documents\GitHub\chrome-extension-security-analyzer\.cursor\debug.log'
-def _ast_log(msg, data=None, hypothesis_id=None):
-    try:
-        os.makedirs(os.path.dirname(_DEBUG_LOG_PATH), exist_ok=True)
-        with open(_DEBUG_LOG_PATH, 'a', encoding='utf-8') as _f:
-            _f.write(json.dumps({'message': msg, 'data': data or {}, 'timestamp': round(time.time() * 1000), 'location': 'ast_analyzer.py', 'hypothesisId': hypothesis_id}, ensure_ascii=False) + '\n')
-    except Exception:
-        pass
-# #endregion
 
 # Max file size for full AST parsing (larger files skip AST to avoid hangs)
 MAX_FILE_SIZE_FOR_AST = 1 * 1024 * 1024  # 1 MiB
@@ -66,9 +53,6 @@ class JavaScriptASTAnalyzer:
             if len(js_files) > MAX_JS_FILES:
                 js_files = sorted(js_files, key=lambda p: p.stat().st_size)[:MAX_JS_FILES]
                 print(f"[AST] Capped to {MAX_JS_FILES} smallest JS files (extension has many files)")
-        # #region agent log
-        _ast_log('AST analyze_directory started', {'js_file_count': len(js_files), 'large_files': [{'path': str(p.relative_to(extension_dir)), 'size_kb': p.stat().st_size // 1024} for p in js_files if p.stat().st_size > 512 * 1024]}, 'H5')
-        # #endregion
         print(f"[AST] Analyzing {len(js_files)} JavaScript files with AST parser...")
         
         # STEP 1: Extract CONFIG values first
@@ -90,10 +74,6 @@ class JavaScriptASTAnalyzer:
                 _sz = js_file.stat().st_size
             except OSError:
                 _sz = 0
-            _t0 = time.perf_counter()
-            # #region agent log
-            _ast_log('AST file start', {'index': idx, 'path': _rel, 'size_bytes': _sz, 'size_kb': _sz // 1024}, 'H3')
-            # #endregion
             file_results = None
             try:
                 if _sz > MAX_FILE_SIZE_FOR_AST:
@@ -136,9 +116,6 @@ class JavaScriptASTAnalyzer:
                 all_results['suspicious_patterns'].extend(file_results.get('suspicious_patterns', []))
             if progress_callback:
                 progress_callback()
-            # #region agent log
-            _ast_log('AST file done', {'path': _rel, 'elapsed_ms': round((time.perf_counter() - _t0) * 1000)}, 'H1')
-            # #endregion
         
         # Print summary
         if all_results['data_exfiltration']:
@@ -232,15 +209,8 @@ class JavaScriptASTAnalyzer:
         }
         
         try:
-            # #region agent log
-            _ast_log('AST parseScript before', {'file': file_path, 'content_len': len(content)}, 'H1')
-            _t_parse = time.perf_counter()
-            # #endregion
             # Parse JavaScript into AST
             ast = esprima.parseScript(content, {'loc': True, 'range': True, 'tolerant': True})
-            # #region agent log
-            _ast_log('AST parseScript after', {'file': file_path, 'elapsed_ms': round((time.perf_counter() - _t_parse) * 1000)}, 'H1')
-            # #endregion
             
             # Analyze the AST
             self._traverse_ast(ast, content, results, depth=0)
@@ -258,10 +228,6 @@ class JavaScriptASTAnalyzer:
     
     def _traverse_ast(self, node, source_code, results, depth=0):
         """Recursively traverse the AST and detect patterns"""
-        # #region agent log
-        if depth == 2000 or depth == 50000:
-            _ast_log('AST traverse depth', {'file': results.get('file'), 'depth': depth}, 'H2')
-        # #endregion
         if depth > MAX_TRAVERSE_DEPTH:
             return
         if node is None or not hasattr(node, 'type'):
@@ -531,19 +497,16 @@ class JavaScriptASTAnalyzer:
         return 'Unknown'
     
     def _get_code_snippet(self, source_code, node, context_lines=6):
-        """Extract code snippet around a node"""
-        
+        """Extract code snippet around a node. Coerce line numbers to int (esprima can return float)."""
         if not hasattr(node, 'loc'):
             return ''
-        
         try:
             lines = source_code.split('\n')
-            start_line = max(0, node.loc.start.line - context_lines - 1)
-            end_line = min(len(lines), node.loc.end.line + context_lines)
-            
+            start_line = max(0, int(node.loc.start.line) - context_lines - 1)
+            end_line = min(len(lines), int(node.loc.end.line) + context_lines)
             snippet_lines = lines[start_line:end_line]
             return '\n'.join(snippet_lines)
-        except:
+        except (TypeError, ValueError, AttributeError):
             return ''
 
 
