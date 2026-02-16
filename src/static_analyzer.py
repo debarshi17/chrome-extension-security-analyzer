@@ -11,8 +11,35 @@ from pathlib import Path
 from collections import defaultdict
 from urllib.parse import urlparse
 import math
+import time
 from ast_analyzer import JavaScriptASTAnalyzer
 
+
+# #region agent log
+def _agent_debug_log(hypothesis_id, location, message, data=None, run_id="pre-fix"):
+    """
+    Lightweight debug logger for performance investigation.
+    Writes NDJSON lines to .cursor/debug.log as required by debug mode.
+    """
+    try:
+        payload = {
+            "id": f"log_{int(time.time() * 1000)}",
+            "timestamp": int(time.time() * 1000),
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+        }
+        log_dir = Path(__file__).resolve().parents[1] / ".cursor"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "debug.log"
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        # Debug logging must never break analysis
+        pass
+# #endregion
 
 
 class EnhancedStaticAnalyzer:
@@ -1524,7 +1551,36 @@ class EnhancedStaticAnalyzer:
         if dev and isinstance(dev, str) and dev.endswith('.js'):
             refs.add(norm(dev))
 
+        # Scripts loaded by manifest-referenced HTML (newtab, popup, etc.)
+        for html_rel in EnhancedStaticAnalyzer._get_manifest_html_pages(manifest):
+            html_path = ext_dir / html_rel
+            if html_path.is_file():
+                try:
+                    raw = html_path.read_text(encoding='utf-8', errors='ignore')
+                    for m in re.finditer(r'<script[^>]*\ssrc\s*=\s*["\']([^"\']+)["\']', raw, re.I):
+                        src = m.group(1).strip()
+                        if src.startswith('/'):
+                            src = src.lstrip('/')
+                        if src.endswith('.js'):
+                            refs.add(norm(src))
+                except Exception:
+                    pass
+
         return refs
+
+    @staticmethod
+    def _get_manifest_html_pages(manifest):
+        """Return list of relative HTML paths from manifest (newtab, popup, etc.)."""
+        out = []
+        for key, val in manifest.get('chrome_url_overrides', {}).items():
+            if isinstance(val, str) and val.endswith('.html'):
+                out.append(val.replace('\\', '/').lstrip('/'))
+        action = manifest.get('action', manifest.get('browser_action', {}))
+        if isinstance(action, dict):
+            popup = action.get('default_popup')
+            if isinstance(popup, str) and popup.endswith('.html'):
+                out.append(popup.replace('\\', '/').lstrip('/'))
+        return out
 
     def _prioritize_js_files_for_security(self, extension_dir, manifest, max_files=300):
         """Return only manifest-referenced JS files + a small set of high-value
@@ -1613,6 +1669,10 @@ class EnhancedStaticAnalyzer:
         'backbone',
         'handlebars',
         'htm.module',
+        # Node/browser polyfills (buffer, ieee754, safe-buffer)
+        'buffer',
+        'ieee754',
+        'safe-buffer',
     ]
 
     def _is_first_party_domain(self, context):
@@ -1682,6 +1742,12 @@ class EnhancedStaticAnalyzer:
             'vue.js',
             'angular',
             'core-js',
+            # Node/browser polyfills (buffer, ieee754, safe-buffer - often in webpack bundles)
+            'the buffer module from node.js',
+            'feross aboukhadijeh',
+            'feross.org',
+            'ieee754.',
+            'safe-buffer.',
             # lit-html / Polymer / LitElement
             'the polymer project authors',
             'polymer.github.io/patents',
@@ -1713,6 +1779,12 @@ class EnhancedStaticAnalyzer:
             '{{lit-',
             'copyright (c) facebook',  # React in bundles
             'copyright facebook, inc',
+            # Node/browser polyfills in webpack bundles
+            'the buffer module from node.js',
+            'feross aboukhadijeh',
+            'feross.org',
+            'ieee754.',
+            'safe-buffer.',
         ]
         for sig in bundled_signatures:
             if sig in code_lower:
@@ -1918,6 +1990,9 @@ class EnhancedStaticAnalyzer:
         
         # OPTIMIZED: Read files once and cache them for all analysis passes
         results['scan_coverage'] = {'total_js_files': len(js_files), 'files_with_scan_errors': 0, 'files_fully_scanned': 0}
+        # Threshold beyond which we avoid full-context regex scanning (large bundles)
+        _MAX_FULL_SCAN_BYTES = 600 * 1024  # 600 KiB
+
         for idx, js_file in enumerate(js_files):
             try:
                 code = self._read_file_cached(js_file)
@@ -1926,24 +2001,71 @@ class EnhancedStaticAnalyzer:
 
                 relative_path = str(js_file.relative_to(extension_dir))
 
+                # #region agent log
+                _agent_debug_log(
+                    hypothesis_id="H1",
+                    location="static_analyzer.py:scan_loop_start",
+                    message="Starting JS file scan",
+                    data={
+                        "file": relative_path,
+                        "index": idx,
+                        "total_files": _total_files,
+                        "code_size": len(code or ""),
+                    },
+                    run_id="scan-perf",
+                )
+                # #endregion
+
                 used_fallback = False
-                try:
-                    patterns_found = self.scan_code(code, relative_path)
-                except Exception as scan_err:
-                    results['scan_coverage']['files_with_scan_errors'] += 1
+                # For very large JS bundles, use a chunked scan to avoid catastrophic
+                # regex slowdowns while still scanning the entire file.
+                if len(code) > _MAX_FULL_SCAN_BYTES:
                     used_fallback = True
-                    print(f"[!] Error scanning {js_file.name}: {scan_err} (using fallback pattern scan)")
-                    patterns_found = self._scan_code_minimal(code, relative_path)
+                    print(f"[i] Large JS file detected ({len(code)} bytes) - using chunked full-pattern scan: {relative_path}")
+                    # #region agent log
+                    _agent_debug_log(
+                        hypothesis_id="H2",
+                        location="static_analyzer.py:large_file_minimal_scan",
+                        message="Using minimal scan for large JS file",
+                        data={
+                            "file": relative_path,
+                            "index": idx,
+                            "total_files": _total_files,
+                            "code_size": len(code or ""),
+                            "max_full_scan_bytes": _MAX_FULL_SCAN_BYTES,
+                        },
+                        run_id="scan-perf",
+                    )
+                    # #endregion
+                    patterns_found = self._scan_large_file_in_chunks(code, relative_path)
                     results['malicious_patterns'].append({
-                        'name': 'Obfuscated or minified bundle (full context scan failed)',
+                        'name': 'Large JS bundle (chunked scan)',
                         'severity': 'medium',
-                        'description': 'Parser failed on this file; only pattern-based scan was run. Minified/obfuscated bundles often break AST and slicing.',
-                        'technique': 'Obfuscation / Parse failure',
+                        'description': 'File is very large/minified; it was scanned in chunks with the full pattern set to avoid extreme slowness. Treat findings here as indicators for deeper manual review.',
+                        'technique': 'Performance safeguard (chunked)',
                         'file': relative_path,
                         'line': 1,
-                        'context': '(fallback scan used)',
+                        'context': '(large-file minimal scan used)',
                         'fallback_scan': True
                     })
+                else:
+                    try:
+                        patterns_found = self.scan_code(code, relative_path)
+                    except Exception as scan_err:
+                        results['scan_coverage']['files_with_scan_errors'] += 1
+                        used_fallback = True
+                        print(f"[!] Error scanning {js_file.name}: {scan_err} (using fallback pattern scan)")
+                        patterns_found = self._scan_code_minimal(code, relative_path)
+                        results['malicious_patterns'].append({
+                            'name': 'Obfuscated or minified bundle (full context scan failed)',
+                            'severity': 'medium',
+                            'description': 'Parser failed on this file; only pattern-based scan was run. Minified/obfuscated bundles often break AST and slicing.',
+                            'technique': 'Obfuscation / Parse failure',
+                            'file': relative_path,
+                            'line': 1,
+                            'context': '(fallback scan used)',
+                            'fallback_scan': True
+                        })
                 if not used_fallback:
                     results['scan_coverage']['files_fully_scanned'] += 1
                 results['malicious_patterns'].extend(patterns_found)
@@ -1966,6 +2088,22 @@ class EnhancedStaticAnalyzer:
                     results['urls_in_code'].extend(extracted)
                 except Exception:
                     pass
+
+                # #region agent log
+                _agent_debug_log(
+                    hypothesis_id="H1",
+                    location="static_analyzer.py:scan_loop_end",
+                    message="Finished JS file scan",
+                    data={
+                        "file": relative_path,
+                        "index": idx,
+                        "total_files": _total_files,
+                        "patterns_found": len(patterns_found) if 'patterns_found' in locals() else None,
+                        "used_fallback": used_fallback,
+                    },
+                    run_id="scan-perf",
+                )
+                # #endregion
                 if _use_progress:
                     _pbar.update(1)
                 if progress_callback and _total_files:
@@ -2735,6 +2873,7 @@ class EnhancedStaticAnalyzer:
     def _scan_code_minimal(self, code, file_path):
         """Fallback when full scan_code fails: pattern match only, no context. Avoids silent skip of critical files."""
         found = []
+        lines = code.split('\n')
         for pattern_def in self._compiled_patterns:
             try:
                 if pattern_def.get('two_pass') and pattern_def.get('tail'):
@@ -2747,6 +2886,27 @@ class EnhancedStaticAnalyzer:
                     start_pos = self._safe_int(match.start(), 0, 0, len(code))
                     line_num = self._safe_int(
                         self._safe_slice(code, 0, start_pos).count('\n') + 1, 1, 1, 2**31 - 1)
+
+                    # Build lightweight context window around the match
+                    idx = max(line_num - 1, 0)
+                    context_start = self._safe_int(idx - 3, 0, 0, len(lines))
+                    context_end = self._safe_int(idx + 4, 0, 0, len(lines))
+                    context_end = min(context_end, len(lines))
+
+                    _MAX_LINE_LEN = 350
+
+                    def _trunc_line(s):
+                        s = (s or '').strip()
+                        return (s[:_MAX_LINE_LEN] + '...') if len(s) > _MAX_LINE_LEN else s
+
+                    context_lines = []
+                    for i in range(context_start, context_end):
+                        line_indicator = '>>>' if i == idx else '   '
+                        context_lines.append(f"{line_indicator} {i + 1:4d} | {_trunc_line(lines[i])}")
+
+                    context_with_numbers = '\n'.join(context_lines)
+                    raw_context = '\n'.join(_trunc_line(lines[i]) for i in range(context_start, context_end))
+
                     found.append({
                         'name': pattern_def['name'],
                         'severity': pattern_def['severity'],
@@ -2754,8 +2914,8 @@ class EnhancedStaticAnalyzer:
                         'technique': pattern_def.get('technique', 'Unknown'),
                         'file': file_path,
                         'line': line_num,
-                        'context': '(fallback scan - context unavailable)',
-                        'context_with_lines': '',
+                        'context': raw_context[:500],
+                        'context_with_lines': context_with_numbers[:4000],
                         'matched_text': (match.group(0) or '')[:100],
                         'is_library_code': False,
                         'fallback_scan': True
@@ -2763,6 +2923,67 @@ class EnhancedStaticAnalyzer:
             except Exception:
                 continue
         return found
+
+    def _scan_large_file_in_chunks(self, code, file_path, chunk_size=300 * 1024, overlap=2 * 1024):
+        """
+        Scan a very large JS file in smaller overlapping chunks to avoid regex
+        backtracking slowness, while preserving full pattern coverage.
+
+        We reuse the minimal scanner for each chunk and adjust line numbers so
+        results map back to the original file.
+        """
+        results = []
+        lines = code.split('\n')
+        length = len(code)
+        start = 0
+
+        while start < length:
+            end = min(start + chunk_size, length)
+            segment = code[start:end]
+
+            # Compute how many lines precede this chunk so we can offset
+            # line numbers from the minimal scanner.
+            line_offset = self._safe_slice(code, 0, start).count('\n')
+
+            segment_results = self._scan_code_minimal(segment, file_path)
+            for r in segment_results:
+                # Adjust line numbers into global file space
+                global_line = self._safe_int(r.get('line', 1) + line_offset, 1, 1, 2**31 - 1)
+                r['line'] = global_line
+
+                # Rebuild a real context snippet from the full file instead of the
+                # minimal scanner's "(fallback scan - context unavailable)" marker.
+                idx = max(global_line - 1, 0)
+                context_start = self._safe_int(idx - 3, 0, 0, len(lines))
+                context_end = self._safe_int(idx + 4, 0, 0, len(lines))
+                context_end = min(context_end, len(lines))
+
+                _MAX_LINE_LEN = 350
+
+                def _trunc_line(s):
+                    s = (s or '').strip()
+                    return (s[:_MAX_LINE_LEN] + '...') if len(s) > _MAX_LINE_LEN else s
+
+                context_lines = []
+                for i in range(context_start, context_end):
+                    line_indicator = '>>>' if i == idx else '   '
+                    context_lines.append(f"{line_indicator} {i + 1:4d} | {_trunc_line(lines[i])}")
+
+                context_with_numbers = '\n'.join(context_lines)
+                raw_context = '\n'.join(_trunc_line(lines[i]) for i in range(context_start, context_end))
+
+                r['context'] = raw_context[:500]
+                r['context_with_lines'] = context_with_numbers[:4000]
+                r['fallback_scan'] = True
+                results.append(r)
+
+            if end >= length:
+                break
+            # Move start forward with overlap to avoid missing patterns that
+            # cross chunk boundaries.
+            start = max(end - overlap, start + 1)
+
+        return results
 
     def find_external_scripts(self, code, file_path):
         """Find external script URLs"""
