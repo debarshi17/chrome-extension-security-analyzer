@@ -3155,43 +3155,98 @@ class EnhancedStaticAnalyzer:
         }
 
     def detect_campaign_membership(self, manifest, settings_overrides, domain_analysis):
-        """Check if extension matches known malicious campaigns"""
-        
-        if settings_overrides.get('search_hijacking'):
+        """Check if extension matches known malicious campaigns.
+
+        DarkSpectre attribution requires BOTH search hijacking AND additional
+        malicious indicators (data exfiltration domains, C2, obfuscation).
+        Search hijacking alone by a trusted publisher (e.g. Microsoft Bing)
+        is not sufficient for campaign attribution.
+        """
+        store = getattr(self, '_current_store_metadata', {}) or {}
+        author = (store.get('author') or '').strip().lower()
+        author_first = author.split()[0].rstrip(',') if author else ''
+        author_verified = store.get('author_verified', False)
+
+        # Extension name from manifest (e.g. "Microsoft Bing Search with Rewards")
+        ext_name = (manifest.get('name') or '').lower()
+
+        # Trusted publisher check — search engines from their own vendor are legitimate
+        search_vendor_match = False
+        if ('bing' in ext_name or 'microsoft' in ext_name) and ('microsoft' in author or author_verified):
+            search_vendor_match = True
+        if ('yahoo' in ext_name) and ('yahoo' in author or author_verified):
+            search_vendor_match = True
+        if ('google' in ext_name) and ('google' in author or author_verified):
+            search_vendor_match = True
+
+        if settings_overrides.get('search_hijacking') and not search_vendor_match:
             search_info = settings_overrides['search_hijacking']
             search_url = search_info['search_url'].lower()
-            
+
+            # DarkSpectre requires search hijacking + suspicious domain infrastructure
+            has_suspicious_domains = False
+            if domain_analysis:
+                domains = domain_analysis if isinstance(domain_analysis, list) else []
+                for d in domains:
+                    if isinstance(d, dict) and d.get('suspicious', False):
+                        has_suspicious_domains = True
+                        break
+
             if ('yahoo.com/search' in search_url and 'fr=' in search_url):
+                if has_suspicious_domains:
+                    return {
+                        'name': 'DarkSpectre / ZoomStealer',
+                        'confidence': 'HIGH',
+                        'indicators': [
+                            'Yahoo search hijacking with affiliate parameter (fr=)',
+                            'Suspicious domain infrastructure detected',
+                            'Known DarkSpectre campaign pattern'
+                        ],
+                        'description': 'Part of campaign that infected 7.8M+ browsers',
+                        'reference': 'https://www.koi.ai/blog/darkspectre-unmasking-the-threat-actor-behind-7-8-million-infected-browsers',
+                        'severity': 'CRITICAL'
+                    }
                 return {
-                    'name': 'DarkSpectre / ZoomStealer',
-                    'confidence': 'HIGH',
+                    'name': 'Search Hijacking Campaign (Yahoo Affiliate)',
+                    'confidence': 'MEDIUM',
                     'indicators': [
                         'Yahoo search hijacking with affiliate parameter (fr=)',
-                        'Known DarkSpectre campaign pattern'
+                        'Monetization through search redirection'
                     ],
-                    'description': 'Part of campaign that infected 7.8M+ browsers',
-                    'reference': 'https://www.koi.ai/blog/darkspectre-unmasking-the-threat-actor-behind-7-8-million-infected-browsers',
-                    'severity': 'CRITICAL'
+                    'description': 'Affiliate fraud via search engine override',
+                    'severity': 'HIGH'
                 }
-            
-            if ('bing.com/search' in search_url and 'pc=' in search_url.lower()):
+
+            if ('bing.com/search' in search_url and 'pc=' in search_url):
+                if has_suspicious_domains:
+                    return {
+                        'name': 'DarkSpectre / ZoomStealer',
+                        'confidence': 'HIGH',
+                        'indicators': [
+                            'Bing search hijacking with affiliate parameter (PC=)',
+                            'Suspicious domain infrastructure detected',
+                            'Known DarkSpectre campaign pattern'
+                        ],
+                        'description': 'Part of campaign that infected 7.8M+ browsers',
+                        'reference': 'https://www.koi.ai/blog/darkspectre-unmasking-the-threat-actor-behind-7-8-million-infected-browsers',
+                        'severity': 'CRITICAL'
+                    }
                 return {
-                    'name': 'DarkSpectre / ZoomStealer',
-                    'confidence': 'HIGH',
+                    'name': 'Search Hijacking Campaign (Bing Affiliate)',
+                    'confidence': 'MEDIUM',
                     'indicators': [
                         'Bing search hijacking with affiliate parameter (PC=)',
-                        'Known DarkSpectre campaign pattern'
+                        'Monetization through search redirection'
                     ],
-                    'description': 'Part of campaign that infected 7.8M+ browsers',
-                    'reference': 'https://www.koi.ai/blog/darkspectre-unmasking-the-threat-actor-behind-7-8-million-infected-browsers',
-                    'severity': 'CRITICAL'
+                    'description': 'Affiliate fraud via search engine override',
+                    'severity': 'HIGH'
                 }
-        
-        if settings_overrides.get('has_overrides'):
+
+        if settings_overrides.get('has_overrides') and not search_vendor_match:
             affiliate_params = []
             if settings_overrides.get('search_hijacking'):
                 affiliate_params = settings_overrides['search_hijacking'].get('affiliate_params', [])
-            
+
             if affiliate_params:
                 return {
                     'name': 'Search Hijacking Campaign (Generic)',
@@ -3203,7 +3258,7 @@ class EnhancedStaticAnalyzer:
                     'description': 'Affiliate fraud via search engine override',
                     'severity': 'HIGH'
                 }
-        
+
         return None
     
     def calculate_enhanced_risk_score(self, results):

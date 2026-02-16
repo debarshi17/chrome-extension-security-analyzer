@@ -209,6 +209,8 @@ class ChromeExtensionAnalyzer:
             _progress(min(pct, 45), "Static analysis", detail)
         print("\n[SCAN] STEP 3: Performing static analysis...")
         print("-" * 80)
+        # Pass store metadata to static analyzer so campaign detection can check trusted publishers
+        self.analyzer._current_store_metadata = store_metadata
         results = self.analyzer.analyze_extension(extension_dir, progress_callback=_static_progress)
         _progress(45, "Static analysis", "Static analysis complete.")
 

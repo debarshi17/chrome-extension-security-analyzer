@@ -58,7 +58,7 @@ class StoreMetadata:
             # Page may be app-shell; try embedded JSON and regex fallbacks first.
             self._fill_from_embedded_json_or_regex(metadata, text, extension_id)
             # Fill from HTML selectors (old store or new store DOM)
-            self._fill_from_dom(metadata, soup)
+            self._fill_from_dom(metadata, soup, text)
             # Privacy and warnings (DOM or regex)
             privacy_link = soup.find('a', href=lambda x: x and 'privacy' in (x or '').lower())
             metadata['has_privacy_policy'] = privacy_link is not None
@@ -217,7 +217,7 @@ class StoreMetadata:
             if mt:
                 metadata['name'] = mt.group(1).strip()[:200]
 
-    def _fill_from_dom(self, metadata, soup):
+    def _fill_from_dom(self, metadata, soup, text=''):
         """Fill metadata from DOM selectors (old and new store)."""
         # Extension name (old: h1.e-f-w; new: may use h1 or different class)
         if not metadata.get('name'):
