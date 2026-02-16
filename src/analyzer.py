@@ -361,13 +361,17 @@ class ChromeExtensionAnalyzer:
                 else:
                     print(f"[+] VERDICT: CLEAN - no suspicious network behavior observed")
 
-                # Feed newly discovered domains into VT
+                # Feed newly discovered domains into VT (filter benign same as initial VT run)
                 new_domains = network_results.get('new_domains', [])
                 if new_domains and not getattr(self, 'skip_vt', False):
                     print(f"[+] Checking {len(new_domains)} runtime-discovered domain(s) against VirusTotal...")
                     new_vt = self.vt_checker.check_multiple_domains(new_domains, max_checks=5)
+                    filtered_new = self.false_positive_filter.filter_virustotal_results(new_vt)
+                    new_vt = filtered_new['filtered_results']
+                    if filtered_new['suppression_count'] > 0:
+                        print(f"[i] Suppressed {filtered_new['suppression_count']} known benign domain(s) (runtime)")
                     vt_results.extend(new_vt)
-                    results = self.analyzer.update_risk_with_virustotal(results, new_vt)
+                    results = self.analyzer.update_risk_with_virustotal(results, vt_results)
             else:
                 error = network_results.get('error', 'Unknown error')
                 print(f"[i] Dynamic analysis unavailable: {error}")

@@ -56,6 +56,9 @@ class VirusTotalChecker:
 
         # Common legitimate extension infrastructure
         'chrome-extension-api.com', 'extension.dev',
+
+        # RFC 2606 reserved (documentation/examples — never malicious)
+        'example.com', 'example.org', 'example.net', 'example.edu', 'www.example.com',
     }
 
     def __init__(self):

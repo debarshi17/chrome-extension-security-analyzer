@@ -2948,10 +2948,21 @@ class ProfessionalReportGenerator:
                 </div>
 """
                 
-                # Add code snippet with context
+                # Add code snippet with context (cap size for report readability)
                 # Prefer context_with_lines (Chrome multi-line) over raw context/evidence
                 context_code = threat.get('context_with_lines', '') or threat.get('context', '') or threat.get('evidence', '')
+                # Truncate to max 15 lines and 250 chars per line so snippets stay scannable
                 if context_code and len(context_code) > 10:
+                    _snippet_lines = context_code.strip().split('\n')
+                    _max_snippet_lines = 15
+                    _max_line_chars = 250
+                    _truncated = []
+                    for _ln in _snippet_lines[: _max_snippet_lines]:
+                        _ln = (_ln[: _max_line_chars] + '...') if len(_ln) > _max_line_chars else _ln
+                        _truncated.append(_ln)
+                    context_code = '\n'.join(_truncated)
+                    if len(_snippet_lines) > _max_snippet_lines:
+                        context_code += '\n...'
                     file_name = self._file_display_name(threat.get('file', 'unknown.js'))
                     line_num = threat.get('line', 0)
                     start_line = threat.get('context_start_line', max(1, line_num))
@@ -2991,10 +3002,21 @@ class ProfessionalReportGenerator:
 """
         return html
     
-    def _generate_code_snippet(self, code, filename, highlight_line, start_line=None):
-        """Generate beautiful code snippet like KOI report with 6-7 lines of context"""
+    # Max lines and chars per line for code snippets (avoid huge minified dumps)
+    _SNIPPET_MAX_LINES = 15
+    _SNIPPET_MAX_LINE_CHARS = 280
 
-        lines = code.strip().split('\n')
+    def _generate_code_snippet(self, code, filename, highlight_line, start_line=None):
+        """Generate beautiful code snippet like KOI report with 6-7 lines of context."""
+
+        raw_lines = code.strip().split('\n')
+        # Enforce max lines and per-line length for report readability
+        lines = []
+        for ln in raw_lines[: self._SNIPPET_MAX_LINES]:
+            ln = (ln[: self._SNIPPET_MAX_LINE_CHARS] + '...') if len(ln) > self._SNIPPET_MAX_LINE_CHARS else ln
+            lines.append(ln)
+        if len(raw_lines) > self._SNIPPET_MAX_LINES:
+            lines.append('...')
 
         # If start_line provided, use it; otherwise calculate from highlight_line
         if start_line is None:

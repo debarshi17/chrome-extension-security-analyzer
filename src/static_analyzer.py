@@ -121,10 +121,11 @@ class EnhancedStaticAnalyzer:
             'google.com', 'googleapis.com', 'mail.google.com', 'accounts.google.com',
             'drive.google.com', 'docs.google.com', 'calendar.google.com',
             'youtube.com', 'gstatic.com', 'googleusercontent.com',
+            'fonts.googleapis.com', 'fonts.gstatic.com',
             # Microsoft services
             'microsoft.com', 'office.com', 'outlook.com', 'live.com',
             'microsoftonline.com', 'azure.com', 'graph.microsoft.com',
-            # Other major platforms
+            # Major platforms
             'github.com', 'api.github.com', 'githubusercontent.com',
             'amazon.com', 'aws.amazon.com',
             'facebook.com', 'graph.facebook.com',
@@ -134,6 +135,26 @@ class EnhancedStaticAnalyzer:
             'notion.so', 'api.notion.com',
             'trello.com', 'api.trello.com',
             'dropbox.com', 'api.dropboxapi.com',
+            # Cloud infrastructure / hosting
+            'cloudfront.net', 's3.amazonaws.com', 'azurewebsites.net',
+            'blob.core.windows.net', 'herokuapp.com',
+            'vercel.app', 'netlify.app', 'pages.dev',
+            # Auth / identity providers
+            'okta.com', 'auth0.com', 'onelogin.com', 'duo.com',
+            # Error tracking / monitoring
+            'sentry.io', 'bugsnag.com', 'datadog.com',
+            'newrelic.com', 'rollbar.com', 'logrocket.com',
+            # Fonts / resources
+            'use.typekit.net', 'use.fontawesome.com',
+            # Developer / reference
+            'stackoverflow.com', 'developer.mozilla.org', 'w3.org',
+            'npmjs.com', 'registry.npmjs.org',
+            # SaaS (not exfil destinations)
+            'intercom.io', 'zendesk.com', 'hubspot.com',
+            'salesforce.com', 'shopify.com',
+            # Social / content
+            'reddit.com', 'medium.com', 'wikipedia.org',
+            'gravatar.com', 'wp.com',
             # RFC 2606 reserved (documentation/examples — never malicious)
             'example.com', 'example.org', 'example.net', 'www.example.com',
         ]
@@ -2564,16 +2585,22 @@ class EnhancedStaticAnalyzer:
                 context_end = self._safe_int(line_num + 3, 0, 0, len(lines))
                 context_end = min(context_end, len(lines))
 
+                # Cap line length so minified code doesn't blow up report (report-friendly snippet)
+                _MAX_LINE_LEN = 350
+                def _trunc_line(s):
+                    s = (s or '').strip()
+                    return (s[: _MAX_LINE_LEN] + '...') if len(s) > _MAX_LINE_LEN else s
+
                 # Build context with line numbers for display
                 context_lines = []
                 for i in range(context_start, context_end):
                     line_indicator = '>>>' if i == line_num - 1 else '   '
-                    context_lines.append(f"{line_indicator} {i + 1:4d} | {lines[i]}")
+                    context_lines.append(f"{line_indicator} {i + 1:4d} | {_trunc_line(lines[i])}")
 
                 context_with_numbers = '\n'.join(context_lines)
 
-                # Also keep raw context for other uses
-                raw_context = '\n'.join(lines[context_start:context_end])
+                # Also keep raw context for other uses (capped)
+                raw_context = '\n'.join(_trunc_line(lines[i]) for i in range(context_start, context_end))
 
                 # Get the matched text itself
                 matched_text = match.group(0)[:100]  # Limit match preview
@@ -2622,7 +2649,7 @@ class EnhancedStaticAnalyzer:
                     'file': file_path,
                     'line': line_num,
                     'context': raw_context[:500],
-                    'context_with_lines': context_with_numbers,
+                    'context_with_lines': context_with_numbers[:4000],
                     'matched_text': matched_text,
                     'context_start_line': context_start + 1,
                     'context_end_line': context_end,
@@ -2653,8 +2680,10 @@ class EnhancedStaticAnalyzer:
         'Background Worker',
         'Random ID Generation for Tracking',
         'Autofill Attribute Manipulation',
+        'Web Crypto API Usage',
+        'High Entropy String (Obfuscation)',
     })
-    _MAX_PER_NAME = 3  # keep at most 3 instances of capped patterns
+    _MAX_PER_NAME = 2  # keep at most 2 instances of capped patterns per extension
 
     def _deduplicate_and_suppress_findings(self, patterns):
         """Deduplicate and suppress noisy findings.
@@ -2670,11 +2699,11 @@ class EnhancedStaticAnalyzer:
         # Step 1: Remove pure informational noise
         filtered = [p for p in patterns if p.get('name') not in self._INFORMATIONAL_NOISE]
 
-        # Step 2: Deduplicate by (name, file)
-        seen = {}  # (name, file) -> index in output list
+        # Step 2: Deduplicate by (name, file, line) so same line doesn't repeat for same pattern
+        seen = {}  # (name, file, line) -> index in output list
         deduped = []
         for p in filtered:
-            key = (p.get('name', ''), p.get('file', ''))
+            key = (p.get('name', ''), p.get('file', ''), p.get('line', 0))
             if key in seen:
                 idx = seen[key]
                 deduped[idx]['duplicate_count'] = deduped[idx].get('duplicate_count', 1) + 1
@@ -3286,10 +3315,25 @@ class EnhancedStaticAnalyzer:
         # Chrome Web Store verified badge OR known legitimate publisher names
         author_verified = store.get('author_verified', False)
         trusted_publishers = frozenset({
+            # Browser / OS vendors
             'google', 'microsoft', 'mozilla', 'apple', 'adobe', 'opera', 'brave',
-            'duckduckgo', 'meta', 'facebook', 'grammarly', 'lastpass', 'bitwarden',
-            '1password', 'dropbox', 'notion', 'slack', 'zoom', 'cisco', 'vmware',
-            'atlassian', 'jetbrains', 'github', 'gitlab', 'cloudflare', 'akamai',
+            'duckduckgo', 'meta', 'facebook', 'samsung', 'hp', 'intel', 'lenovo', 'dell',
+            # Password managers / security
+            'grammarly', 'lastpass', 'bitwarden', '1password', 'dashlane', 'keeper',
+            'norton', 'avast', 'mcafee', 'kaspersky', 'eset', 'malwarebytes', 'sophos',
+            'trendmicro', 'nordvpn', 'nord', 'expressvpn', 'proton',
+            # Productivity / SaaS
+            'dropbox', 'notion', 'slack', 'zoom', 'evernote', 'todoist', 'pocket',
+            'pinterest', 'canva', 'figma', 'loom', 'calendly',
+            # Cloud / infrastructure
+            'cisco', 'vmware', 'atlassian', 'jetbrains', 'github', 'gitlab',
+            'cloudflare', 'akamai', 'amazon', 'aws', 'salesforce',
+            # Enterprise / identity
+            'okta', 'auth0', 'hubspot', 'zendesk', 'shopify', 'twilio',
+            'sentry', 'datadog', 'newrelic', 'ibm', 'oracle', 'sap', 'intuit', 'autodesk',
+            # Web platforms
+            'spotify', 'netflix', 'reddit', 'snap', 'yahoo', 'paypal', 'honey',
+            'wix', 'squarespace', 'vercel', 'netlify',
         })
         is_trusted_publisher = author_verified or (author_lower in trusted_publishers) or (author_first in trusted_publishers)
 
@@ -3359,6 +3403,17 @@ class EnhancedStaticAnalyzer:
         breakdown['sensitive_target_multiplier'] = st_multiplier
 
         final_score = min(max(raw_score, 0), 10.0)
+
+        # First-party / trusted publisher: downgrade to LOW (score < 4)
+        # BUT skip cap if critical findings exist (supply chain attack protection)
+        has_malicious_hash = any(
+            h.get('vt_result', {}).get('status') == 'MALICIOUS'
+            for h in results.get('file_hashes', [])
+            if isinstance(h, dict)
+        )
+        if is_trusted_publisher and crit_count == 0 and bc_crit == 0 and not has_malicious_hash:
+            final_score = min(final_score, 3.5)
+            breakdown['first_party_cap'] = 'LOW'
 
         # Store breakdown for debugging
         results['risk_breakdown'] = breakdown

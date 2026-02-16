@@ -14,15 +14,19 @@ class FalsePositiveFilter:
         # Google services
         'googleapis.com', 'google.com', 'gstatic.com', 'googleusercontent.com',
         'accounts.google.com', 'chrome.google.com',
+        'fonts.googleapis.com', 'fonts.gstatic.com',
 
         # Firebase (commonly flagged due to abuse by other apps)
         'firebaseio.com', 'firebase.google.com', 'firebasestorage.googleapis.com',
         'firebaseapp.com',
 
-        # CDNs
+        # CDNs / cloud infrastructure
         'cloudflare.com', 'cloudflareinsights.com', 'cdnjs.cloudflare.com',
         'jsdelivr.net', 'unpkg.com', 'cdn.jsdelivr.net',
         'akamai.net', 'fastly.net',
+        'cloudfront.net', 's3.amazonaws.com',
+        'azurewebsites.net', 'blob.core.windows.net',
+        'herokuapp.com', 'vercel.app', 'netlify.app', 'pages.dev',
 
         # Common libraries
         'jquery.com', 'jquerycdn.com',
@@ -34,12 +38,32 @@ class FalsePositiveFilter:
         # Payment processors
         'stripe.com', 'paypal.com', 'braintreepayments.com',
 
-        # Common dev tools
+        # Dev tools / registries
         'github.com', 'githubusercontent.com', 'gitlab.com',
-        'npmjs.org', 'yarnpkg.com',
+        'npmjs.org', 'npmjs.com', 'registry.npmjs.org', 'yarnpkg.com',
+        'stackoverflow.com', 'developer.mozilla.org', 'w3.org',
 
         # Browser vendors
         'mozilla.org', 'microsoft.com', 'apple.com',
+
+        # Auth / identity providers
+        'okta.com', 'auth0.com', 'onelogin.com', 'duo.com',
+
+        # Error tracking / monitoring
+        'sentry.io', 'sentry-cdn.com', 'bugsnag.com',
+        'datadog.com', 'datadoghq.com', 'newrelic.com',
+        'rollbar.com', 'logrocket.com',
+
+        # Fonts / resources
+        'use.typekit.net', 'use.fontawesome.com',
+
+        # SaaS (not exfil destinations)
+        'intercom.io', 'zendesk.com', 'hubspot.com',
+        'salesforce.com', 'shopify.com',
+
+        # Social / content
+        'reddit.com', 'medium.com', 'wikipedia.org',
+        'gravatar.com', 'wp.com',
 
         # RFC 2606 reserved (documentation/examples — never malicious)
         'example.com', 'example.org', 'example.net', 'example.edu', 'example.mil', 'example.int',
@@ -114,7 +138,11 @@ class FalsePositiveFilter:
         Returns:
             tuple: (is_benign, reason)
         """
-        domain_lower = domain.lower()
+        if domain is None or not isinstance(domain, str):
+            return False, None
+        domain_lower = domain.strip().lower()
+        if not domain_lower:
+            return False, None
 
         # Check exact matches
         if domain_lower in self.BENIGN_DOMAINS:
@@ -211,7 +239,7 @@ class FalsePositiveFilter:
         suppressed = []
 
         for result in vt_results:
-            domain = result.get('domain', '')
+            domain = (result.get('domain') or '').strip()
 
             # Check if benign
             is_benign, reason = self.is_benign_domain(domain)

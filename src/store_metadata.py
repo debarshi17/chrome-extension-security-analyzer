@@ -193,6 +193,22 @@ class StoreMetadata:
                 ms = re.search(r'>Size</div><div>([^<]+)</div>', text)
                 if ms:
                     metadata['size'] = ms.group(1).strip()
+        # Developer info from embedded data array (most reliable on new store)
+        if not metadata.get('author') or not metadata.get('author_verified'):
+            dev_match = re.search(
+                r'\["([^"]*@[^"]+)",'           # developer email
+                r'(?:"[^"]*"|null),'             # address
+                r'(?:null|\d+),'                 # field2
+                r'(\d+|null),'                   # verified flag
+                r'(?:null|\d+),'                 # field4
+                r'"([^"]+)",'                    # developer id
+                r'"([^"]+)"',                    # developer name
+                text
+            )
+            if dev_match:
+                if not metadata.get('author'):
+                    metadata['author'] = dev_match.group(4)
+                metadata['author_verified'] = dev_match.group(2) == '1'
         # og:title / meta title
         if not metadata.get('name'):
             mt = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', text, re.I)
@@ -226,8 +242,7 @@ class StoreMetadata:
                 if atext and 'dashboard' not in atext.lower() and 'opens' not in atext.lower():
                     metadata['author'] = atext
         if not metadata.get('author_verified'):
-            # New store may show verified state in DOM or we leave False; trusted list in static_analyzer still applies
-            metadata['author_verified'] = False
+            metadata['author_verified'] = self._detect_verified_badge(soup, text)
         # User count (old: span.e-f-ih)
         if not metadata.get('user_count_text'):
             user_count_tag = soup.find('span', class_='e-f-ih')
@@ -264,6 +279,55 @@ class StoreMetadata:
         size_tag = soup.find('span', class_='C-b-p-D-Xe h-C-b-p-D-za')
         if size_tag and not metadata.get('size'):
             metadata['size'] = size_tag.text.strip()
+
+    def _detect_verified_badge(self, soup, text):
+        """
+        Detect the verified publisher badge on the Chrome Web Store page.
+
+        The new CWS (chromewebstore.google.com) embeds developer metadata in
+        a serialized array. The developer info block follows the pattern:
+            ["email@dev.com", "address", null, VERIFIED_FLAG, null, "dev-id", "Dev Name", ...]
+        where VERIFIED_FLAG = 1 for verified publishers, null otherwise.
+        """
+        # Strategy 1 (primary): Parse the embedded developer data array
+        # Pattern: [email, address, null, VERIFIED_FLAG, null, dev_id, dev_name]
+        m = re.search(
+            r'\["([^"]*@[^"]+)",'           # developer email
+            r'(?:"[^"]*"|null),'             # address (string or null)
+            r'(?:null|\d+),'                 # field2
+            r'(\d+|null),'                   # VERIFIED FLAG (1 = verified)
+            r'(?:null|\d+),'                 # field4
+            r'"([^"]+)",'                    # developer id
+            r'"([^"]+)"',                    # developer name
+            text
+        )
+        if m:
+            verified_flag = m.group(2)
+            if verified_flag == '1':
+                return True
+            return False
+
+        # Strategy 2: Fallback — embedded JSON fields
+        json_patterns = [
+            r'"isVerified"\s*:\s*true',
+            r'"verified"\s*:\s*true',
+            r'"developerVerified"\s*:\s*true',
+        ]
+        for pattern in json_patterns:
+            if re.search(pattern, text, re.I):
+                return True
+
+        # Strategy 3: DOM attributes (aria-label, class)
+        if soup.find(attrs={'aria-label': re.compile(r'verified', re.I)}):
+            return True
+        if soup.find(class_=re.compile(r'verif', re.I)):
+            return True
+
+        # Strategy 4: Plain text markers
+        if re.search(r'Verified\s+(?:developer|publisher)', text, re.I):
+            return True
+
+        return False
 
     def _calculate_risk_signals(self, metadata):
         """
